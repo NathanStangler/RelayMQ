@@ -23,12 +23,14 @@ find_package(Threads REQUIRED)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-add_library(relaymq_core INTERFACE)
-target_include_directories(relaymq_core INTERFACE
+add_library(relaymq_core
+    src/protocol.cpp
+)
+target_include_directories(relaymq_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(relaymq_core INTERFACE
+target_link_libraries(relaymq_core PUBLIC
     Threads::Threads
 )
 
@@ -56,3 +58,14 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(googletest)
+
+add_executable(relaymq_tests
+    tests/test_protocol.cpp
+)
+target_link_libraries(relaymq_tests PRIVATE
+    relaymq_core
+    GTest::gtest_main
+)
+
+include(GoogleTest)
+gtest_discover_tests(relaymq_tests)
