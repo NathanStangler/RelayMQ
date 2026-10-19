@@ -73,7 +73,7 @@ TEST(ProtocolParserTest, StreamFragmentation) {
     relaymq::ProtocolParser parser;
     relaymq::Command cmd;
 
-    parser.append("PUB message.new 1");
+    parser.append("PUB service.message.new 1");
     EXPECT_FALSE(parser.next_command(cmd));
 
     parser.append("4\r\n{\"value\":\"");
@@ -83,7 +83,7 @@ TEST(ProtocolParserTest, StreamFragmentation) {
     ASSERT_TRUE(parser.next_command(cmd));
 
     EXPECT_EQ(cmd.type, relaymq::CommandType::PUB);
-    EXPECT_EQ(cmd.subject, "message.new");
+    EXPECT_EQ(cmd.subject, "service.message.new");
     EXPECT_EQ(cmd.payload, "{\"value\":\"50\"}");
 
     EXPECT_EQ(parser.buffered_bytes(), 0);
@@ -94,8 +94,8 @@ TEST(ProtocolParserTest, Serializers) {
     EXPECT_EQ(relaymq::ProtocolParser::format_pong(), "PONG\r\n");
     EXPECT_EQ(relaymq::ProtocolParser::format_ok(), "OK\r\n");
     EXPECT_EQ(relaymq::ProtocolParser::format_err("unknown topic"), "ERR unknown topic\r\n");
-    EXPECT_EQ(relaymq::ProtocolParser::format_sub("counts.*", "1"), "SUB counts.* 1\r\n");
+    EXPECT_EQ(relaymq::ProtocolParser::format_sub("service.counts.*", "1"), "SUB service.counts.* 1\r\n");
     EXPECT_EQ(relaymq::ProtocolParser::format_unsub("1"), "UNSUB 1\r\n");
-    EXPECT_EQ(relaymq::ProtocolParser::format_pub("test", "abc"), "PUB test 3\r\nabc\r\n");
-    EXPECT_EQ(relaymq::ProtocolParser::format_msg("test", "1", "abc"), "MSG test 1 3\r\nabc\r\n");
+    EXPECT_EQ(relaymq::ProtocolParser::format_pub("service.message", "abc"), "PUB service.message 3\r\nabc\r\n");
+    EXPECT_EQ(relaymq::ProtocolParser::format_msg("service.message", "1", "abc"), "MSG service.message 1 3\r\nabc\r\n");
 }

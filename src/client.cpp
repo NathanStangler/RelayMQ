@@ -21,6 +21,11 @@ bool Client::connect(const std::string& host, uint16_t port) {
         return true;
     }
 
+    if (receive_thread_.joinable()) {
+        receive_thread_.join();
+    }
+    parser_.clear();
+
     socket_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd_ < 0) {
         return false;
@@ -60,7 +65,11 @@ void Client::disconnect() {
     }
 
     if (receive_thread_.joinable()) {
-        receive_thread_.join();
+        if (std::this_thread::get_id() != receive_thread_.get_id()) {
+            receive_thread_.join();
+        } else {
+            receive_thread_.detach();
+        }
     }
 
     pong_cv_.notify_all();
@@ -168,24 +177,24 @@ std::optional<Message> Client::request(const std::string& subject, const std::st
 }
 
 int64_t Client::ping(int timeout_ms) {
+    std::unique_lock<std::mutex> lock(pong_mutex_);
     if (!is_connected_) {
         return -1;
     }
 
-    std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
     awaiting_pong_ = true;
+    std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
 
     if (!send_raw(ProtocolParser::format_ping())) {
         awaiting_pong_ = false;
         return -1;
     }
 
-    std::unique_lock<std::mutex> lock(pong_mutex_);
     bool received = pong_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this]() {
         return !awaiting_pong_.load() || !is_connected_.load();
     });
 
-    if (!received || !is_connected_) {
+    if (!received || !is_connected_ || awaiting_pong_.load()) {
         awaiting_pong_ = false;
         return -1;
     }

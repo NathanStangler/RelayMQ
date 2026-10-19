@@ -2,8 +2,8 @@
 
 #include "relaymq/protocol.hpp"
 #include <string>
-#include <mutex>
 #include <memory>
+#include <atomic>
 
 namespace relaymq {
 
@@ -22,10 +22,10 @@ public:
     void close_connection();
 
 private:
-    int socket_fd_;
+    std::atomic<int> socket_fd_;
     std::string client_id_;
     ProtocolParser parser_;
-    bool is_open_;
+    std::atomic<bool> is_open_;
 };
 
 }

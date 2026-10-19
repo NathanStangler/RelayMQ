@@ -86,23 +86,23 @@ bool Server::start(uint16_t port) {
     epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, stop_event_fd_, &stop_ev);
 
     broker_.set_outbound_handler([this](std::shared_ptr<Connection> conn, std::string data) {
-        while (is_running_ && !outbound_queue_.push(OutboundMessage{std::move(conn), std::move(data)})) {
+        OutboundMessage msg{std::move(conn), std::move(data)};
+        while (is_running_.load(std::memory_order_relaxed) && !outbound_queue_.push(std::move(msg))) {
             std::this_thread::yield();
         }
     });
 
-    is_running_ = true;
+    is_running_.store(true, std::memory_order_release);
     writer_thread_ = std::thread(&Server::writer_loop, this);
     event_thread_ = std::thread(&Server::event_loop, this);
     return true;
 }
 
 void Server::stop() {
-    if (!is_running_) {
+    bool expected = true;
+    if (!is_running_.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) {
         return;
     }
-
-    is_running_ = false;
 
     if (stop_event_fd_ >= 0) {
         uint64_t val = 1;
@@ -259,16 +259,22 @@ void Server::flush_batch(int fd, std::string& batch) {
     }
 
     size_t total_sent = 0;
-    while (total_sent < batch.size()) {
+    int retries = 0;
+    while (is_running_.load(std::memory_order_relaxed) && total_sent < batch.size()) {
         ssize_t sent = send(fd, batch.data() + total_sent, batch.size() - total_sent, MSG_NOSIGNAL);
         if (sent <= 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                retries++;
+                if (retries > 1000) {
+                    break;
+                }
                 std::this_thread::yield();
                 continue;
             }
             break;
         }
         total_sent += static_cast<size_t>(sent);
+        retries = 0;
     }
     batch.clear();
 }
@@ -278,7 +284,7 @@ void Server::writer_loop() {
     batch.reserve(65536);
     int current_fd = -1;
 
-    while (is_running_) {
+    while (is_running_.load(std::memory_order_relaxed)) {
         OutboundMessage msg;
         if (outbound_queue_.pop(msg)) {
             if (!msg.conn || !msg.conn->is_open()) {
@@ -310,6 +316,19 @@ void Server::writer_loop() {
         } else {
             std::this_thread::yield();
         }
+    }
+
+    OutboundMessage msg;
+    while (outbound_queue_.pop(msg)) {
+        if (!msg.conn || !msg.conn->is_open()) {
+            continue;
+        }
+        int fd = msg.conn->socket_fd();
+        if (fd != current_fd || batch.size() + msg.data.size() > 65536) {
+            flush_batch(current_fd, batch);
+            current_fd = fd;
+        }
+        batch.append(msg.data);
     }
 
     flush_batch(current_fd, batch);

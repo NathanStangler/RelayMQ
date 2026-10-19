@@ -21,7 +21,20 @@ public:
     SpscQueue(SpscQueue&&) = delete;
     SpscQueue& operator=(SpscQueue&&) = delete;
 
-    bool push(T item) {
+    bool push(const T& item) {
+        const size_t current_head = head_.load(std::memory_order_relaxed);
+        const size_t current_tail = tail_.load(std::memory_order_acquire);
+
+        if (current_head - current_tail == Capacity) {
+            return false;
+        }
+
+        buffer_[current_head & Mask] = item;
+        head_.store(current_head + 1, std::memory_order_release);
+        return true;
+    }
+
+    bool push(T&& item) {
         const size_t current_head = head_.load(std::memory_order_relaxed);
         const size_t current_tail = tail_.load(std::memory_order_acquire);
 
@@ -48,9 +61,7 @@ public:
     }
 
     size_t size() const {
-        size_t head = head_.load(std::memory_order_relaxed);
-        size_t tail = tail_.load(std::memory_order_relaxed);
-        return head >= tail ? (head - tail) : 0;
+        return head_.load(std::memory_order_relaxed) - tail_.load(std::memory_order_relaxed);
     }
 
     bool empty() const {

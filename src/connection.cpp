@@ -16,11 +16,11 @@ const std::string& Connection::id() const {
 }
 
 int Connection::socket_fd() const {
-    return socket_fd_;
+    return socket_fd_.load(std::memory_order_relaxed);
 }
 
 bool Connection::is_open() const {
-    return is_open_;
+    return is_open_.load(std::memory_order_acquire);
 }
 
 ProtocolParser& Connection::parser() {
@@ -28,11 +28,11 @@ ProtocolParser& Connection::parser() {
 }
 
 void Connection::close_connection() {
-    if (is_open_) {
-        is_open_ = false;
-        if (socket_fd_ >= 0) {
-            close(socket_fd_);
-            socket_fd_ = -1;
+    bool expected = true;
+    if (is_open_.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) {
+        int fd = socket_fd_.exchange(-1, std::memory_order_acq_rel);
+        if (fd >= 0) {
+            close(fd);
         }
     }
 }

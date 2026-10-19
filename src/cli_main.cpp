@@ -7,9 +7,7 @@
 #include <condition_variable>
 #include <thread>
 
-namespace {
-
-void parse_endpoint(int argc, char* argv[], int start_idx, std::string& host, uint16_t& port) {
+static void parse_endpoint(int argc, char* argv[], int start_idx, std::string& host, uint16_t& port) {
     host = "127.0.0.1";
     port = 9000;
 
@@ -21,7 +19,12 @@ void parse_endpoint(int argc, char* argv[], int start_idx, std::string& host, ui
     size_t colon_pos = first.find(':');
     if (colon_pos != std::string::npos) {
         host = first.substr(0, colon_pos);
-        port = static_cast<uint16_t>(std::stoi(first.substr(colon_pos + 1)));
+        try {
+            int p = std::stoi(first.substr(colon_pos + 1));
+            if (p > 0 && p <= 65535) {
+                port = static_cast<uint16_t>(p);
+            }
+        } catch (const std::exception&) {}
         return;
     }
 
@@ -34,24 +37,32 @@ void parse_endpoint(int argc, char* argv[], int start_idx, std::string& host, ui
     }
 
     if (is_number) {
-        port = static_cast<uint16_t>(std::stoi(first));
+        try {
+            int p = std::stoi(first);
+            if (p > 0 && p <= 65535) {
+                port = static_cast<uint16_t>(p);
+            }
+        } catch (const std::exception&) {}
     } else {
         host = first;
         if (start_idx + 1 < argc) {
-            port = static_cast<uint16_t>(std::stoi(argv[start_idx + 1]));
+            try {
+                int p = std::stoi(argv[start_idx + 1]);
+                if (p > 0 && p <= 65535) {
+                    port = static_cast<uint16_t>(p);
+                }
+            } catch (const std::exception&) {}
         }
     }
 }
 
-void print_usage() {
+static void print_usage() {
     std::cout << "RelayMQ CLI\n\n"
               << "Usage:\n"
               << "  relay-cli pub <subject> <payload> [host] [port]   Publish a message\n"
               << "  relay-cli sub <subject> [host] [port]             Subscribe and listen for messages\n"
               << "  relay-cli ping [host] [port]                      Ping the broker and measure latency\n\n"
               << "Defaults: host = 127.0.0.1, port = 9000\n";
-}
-
 }
 
 int main(int argc, char* argv[]) {

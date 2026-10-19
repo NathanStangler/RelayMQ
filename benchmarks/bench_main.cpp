@@ -13,8 +13,6 @@
 #include <atomic>
 #include <cstdint>
 
-namespace {
-
 struct BenchConfig {
     std::string host = "127.0.0.1";
     uint16_t port = 0;
@@ -35,7 +33,7 @@ struct LatencyStats {
     double max_us = 0.0;
 };
 
-LatencyStats calculate_stats(std::vector<int64_t>& samples_ns) {
+static LatencyStats calculate_stats(std::vector<int64_t>& samples_ns) {
     LatencyStats stats{};
     if (samples_ns.empty()) {
         return stats;
@@ -60,7 +58,7 @@ LatencyStats calculate_stats(std::vector<int64_t>& samples_ns) {
     return stats;
 }
 
-void print_latency_table(const std::string& title, const LatencyStats& stats, size_t count) {
+static void print_latency_table(const std::string& title, const LatencyStats& stats, size_t count) {
     std::cout << "\n--- " << title << " (" << count << " iterations) ---\n";
     std::cout << std::fixed << std::setprecision(2);
     std::cout << std::left << std::setw(12) << "Metric" << std::right << std::setw(16) << "Latency (us)" << std::setw(16) << "Latency (ms)" << "\n";
@@ -74,7 +72,7 @@ void print_latency_table(const std::string& title, const LatencyStats& stats, si
     std::cout << std::left << std::setw(12) << "Max" << std::right << std::setw(16) << stats.max_us << std::setw(16) << (stats.max_us / 1000.0) << "\n";
 }
 
-void run_throughput_benchmark(const std::string& host, uint16_t port, size_t count, size_t payload_size) {
+static void run_throughput_benchmark(const std::string& host, uint16_t port, size_t count, size_t payload_size) {
     std::cout << "Throughput Benchmark\n\n";
     std::cout << "Messages: " << count << "\n";
     std::cout << "Payload size: " << payload_size << " bytes\n";
@@ -149,7 +147,7 @@ void run_throughput_benchmark(const std::string& host, uint16_t port, size_t cou
     sub_client.disconnect();
 }
 
-void run_ping_latency_benchmark(const std::string& host, uint16_t port, size_t count) {
+static void run_ping_latency_benchmark(const std::string& host, uint16_t port, size_t count) {
     relaymq::Client client;
     if (!client.connect(host, port)) {
         std::cerr << "Ping latency benchmark: failed to connect.\n";
@@ -180,7 +178,7 @@ void run_ping_latency_benchmark(const std::string& host, uint16_t port, size_t c
     client.disconnect();
 }
 
-void run_pubsub_latency_benchmark(const std::string& host, uint16_t port, size_t count, size_t payload_size) {
+static void run_pubsub_latency_benchmark(const std::string& host, uint16_t port, size_t count, size_t payload_size) {
     const std::string req_subject = "service.bench.latency.req";
     const std::string res_subject = "service.bench.latency.res";
     std::string payload(payload_size, 'A');
@@ -250,7 +248,7 @@ void run_pubsub_latency_benchmark(const std::string& host, uint16_t port, size_t
     echo_client.disconnect();
 }
 
-void print_usage() {
+static void print_usage() {
     std::cout << "RelayMQ Benchmarking\n\n"
               << "Usage: relay-bench [options]\n\n"
               << "Options:\n"
@@ -263,8 +261,6 @@ void print_usage() {
               << "  --help                   Display this help message\n";
 }
 
-}
-
 int main(int argc, char* argv[]) {
     BenchConfig config;
 
@@ -274,21 +270,45 @@ int main(int argc, char* argv[]) {
             print_usage();
             return 0;
         } else if (arg == "--server" && i + 1 < argc) {
-            std::string s = argv[++i];
+            i++;
+            std::string s = argv[i];
             size_t colon = s.find(':');
             if (colon != std::string::npos) {
                 config.host = s.substr(0, colon);
-                config.port = static_cast<uint16_t>(std::stoi(s.substr(colon + 1)));
+                try {
+                    config.port = static_cast<uint16_t>(std::stoi(s.substr(colon + 1)));
+                } catch (const std::exception&) {
+                    std::cerr << "Invalid port in --server argument: " << s << "\n";
+                    return 1;
+                }
             } else {
                 config.host = s;
                 config.port = 9000;
             }
         } else if (arg == "--throughput-count" && i + 1 < argc) {
-            config.throughput_count = static_cast<size_t>(std::stoull(argv[++i]));
+            i++;
+            try {
+                config.throughput_count = static_cast<size_t>(std::stoull(argv[i]));
+            } catch (const std::exception&) {
+                std::cerr << "Invalid --throughput-count: " << argv[i] << "\n";
+                return 1;
+            }
         } else if (arg == "--latency-count" && i + 1 < argc) {
-            config.latency_count = static_cast<size_t>(std::stoull(argv[++i]));
+            i++;
+            try {
+                config.latency_count = static_cast<size_t>(std::stoull(argv[i]));
+            } catch (const std::exception&) {
+                std::cerr << "Invalid --latency-count: " << argv[i] << "\n";
+                return 1;
+            }
         } else if (arg == "--payload" && i + 1 < argc) {
-            config.payload_size = static_cast<size_t>(std::stoull(argv[++i]));
+            i++;
+            try {
+                config.payload_size = static_cast<size_t>(std::stoull(argv[i]));
+            } catch (const std::exception&) {
+                std::cerr << "Invalid --payload: " << argv[i] << "\n";
+                return 1;
+            }
         } else if (arg == "--throughput-only") {
             config.run_throughput = true;
             config.run_latency = false;
