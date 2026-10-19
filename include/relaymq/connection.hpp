@@ -19,7 +19,6 @@ public:
     int socket_fd() const;
     bool is_open() const;
     ProtocolParser& parser();
-    bool send_data(const std::string& data);
     void close_connection();
 
 private:
@@ -27,7 +26,6 @@ private:
     std::string client_id_;
     ProtocolParser parser_;
     bool is_open_;
-    std::mutex send_mutex_;
 };
 
 }

@@ -85,7 +85,14 @@ bool Server::start(uint16_t port) {
     stop_ev.data.fd = stop_event_fd_;
     epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, stop_event_fd_, &stop_ev);
 
+    broker_.set_outbound_handler([this](std::shared_ptr<Connection> conn, std::string data) {
+        while (is_running_ && !outbound_queue_.push(OutboundMessage{std::move(conn), std::move(data)})) {
+            std::this_thread::yield();
+        }
+    });
+
     is_running_ = true;
+    writer_thread_ = std::thread(&Server::writer_loop, this);
     event_thread_ = std::thread(&Server::event_loop, this);
     return true;
 }
@@ -104,6 +111,10 @@ void Server::stop() {
 
     if (event_thread_.joinable()) {
         event_thread_.join();
+    }
+
+    if (writer_thread_.joinable()) {
+        writer_thread_.join();
     }
 
     if (epoll_fd_ >= 0) {
@@ -239,6 +250,68 @@ void Server::remove_client(int client_fd) {
         broker_.remove_connection(conn->id());
         conn->close_connection();
     }
+}
+
+void Server::flush_batch(int fd, std::string& batch) {
+    if (fd < 0 || batch.empty()) {
+        return;
+    }
+
+    size_t total_sent = 0;
+    while (total_sent < batch.size()) {
+        ssize_t sent = send(fd, batch.data() + total_sent, batch.size() - total_sent, MSG_NOSIGNAL);
+        if (sent <= 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                std::this_thread::yield();
+                continue;
+            }
+            break;
+        }
+        total_sent += static_cast<size_t>(sent);
+    }
+    batch.clear();
+}
+
+void Server::writer_loop() {
+    std::string batch;
+    batch.reserve(65536);
+    int current_fd = -1;
+
+    while (is_running_) {
+        OutboundMessage msg;
+        if (outbound_queue_.pop(msg)) {
+            if (!msg.conn || !msg.conn->is_open()) {
+                continue;
+            }
+
+            int fd = msg.conn->socket_fd();
+            if (fd != current_fd || batch.size() + msg.data.size() > 65536) {
+                flush_batch(current_fd, batch);
+                current_fd = fd;
+            }
+
+            batch.append(msg.data);
+
+            while (outbound_queue_.pop(msg)) {
+                if (!msg.conn || !msg.conn->is_open()) {
+                    continue;
+                }
+                fd = msg.conn->socket_fd();
+                if (fd != current_fd || batch.size() + msg.data.size() > 65536) {
+                    flush_batch(current_fd, batch);
+                    current_fd = fd;
+                }
+                batch.append(msg.data);
+            }
+
+            flush_batch(current_fd, batch);
+            current_fd = -1;
+        } else {
+            std::this_thread::yield();
+        }
+    }
+
+    flush_batch(current_fd, batch);
 }
 
 }

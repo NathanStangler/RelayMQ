@@ -27,30 +27,7 @@ ProtocolParser& Connection::parser() {
     return parser_;
 }
 
-bool Connection::send_data(const std::string& data) {
-    std::lock_guard<std::mutex> lock(send_mutex_);
-    if (!is_open_ || socket_fd_ < 0) {
-        return false;
-    }
-
-    size_t total_sent = 0;
-    const char* buffer = data.data();
-    size_t length = data.size();
-
-    while (total_sent < length) {
-        ssize_t sent = send(socket_fd_, buffer + total_sent, length - total_sent, MSG_NOSIGNAL);
-        if (sent <= 0) {
-            is_open_ = false;
-            return false;
-        }
-        total_sent += static_cast<size_t>(sent);
-    }
-
-    return true;
-}
-
 void Connection::close_connection() {
-    std::lock_guard<std::mutex> lock(send_mutex_);
     if (is_open_) {
         is_open_ = false;
         if (socket_fd_ >= 0) {

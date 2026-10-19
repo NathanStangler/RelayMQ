@@ -2,6 +2,11 @@
 
 namespace relaymq {
 
+void Broker::set_outbound_handler(OutboundHandler handler) {
+    std::lock_guard<std::mutex> lock(broker_mutex_);
+    outbound_handler_ = std::move(handler);
+}
+
 void Broker::add_connection(std::shared_ptr<Connection> conn) {
     if (!conn) {
         return;
@@ -17,12 +22,11 @@ void Broker::remove_connection(const std::string& client_id) {
 }
 
 void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd) {
-    if (!conn) {
+    if (!conn || !outbound_handler_) {
         return;
     }
 
-    std::vector<std::pair<std::shared_ptr<Connection>, std::string>> pending_sends;
-    std::unique_lock<std::mutex> lock(broker_mutex_);
+    std::lock_guard<std::mutex> lock(broker_mutex_);
 
     switch (cmd.type) {
         case CommandType::PUB: {
@@ -32,23 +36,23 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
                 auto it = connections_.find(sub.client_id);
                 if (it != connections_.end() && it->second->is_open()) {
                     std::string msg = ProtocolParser::format_msg(cmd.subject, sub.sid, cmd.payload, cmd.reply_to);
-                    pending_sends.push_back({it->second, std::move(msg)});
+                    outbound_handler_(it->second, std::move(msg));
                 }
             }
             break;
         }
         case CommandType::SUB: {
             registry_.add_subscription(cmd.subject, conn->id(), cmd.sid);
-            pending_sends.push_back({conn, ProtocolParser::format_ok()});
+            outbound_handler_(conn, ProtocolParser::format_ok());
             break;
         }
         case CommandType::UNSUB: {
             registry_.remove_subscription(conn->id(), cmd.sid);
-            pending_sends.push_back({conn, ProtocolParser::format_ok()});
+            outbound_handler_(conn, ProtocolParser::format_ok());
             break;
         }
         case CommandType::PING: {
-            pending_sends.push_back({conn, ProtocolParser::format_pong()});
+            outbound_handler_(conn, ProtocolParser::format_pong());
             break;
         }
         case CommandType::PONG:
@@ -57,12 +61,6 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
         case CommandType::UNKNOWN:
         default:
             break;
-    }
-
-    lock.unlock();
-
-    for (size_t i = 0; i < pending_sends.size(); i++) {
-        pending_sends[i].first->send_data(pending_sends[i].second);
     }
 }
 

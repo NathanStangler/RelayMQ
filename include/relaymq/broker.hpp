@@ -6,14 +6,18 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <functional>
 
 namespace relaymq {
 
 class Broker {
 public:
+    using OutboundHandler = std::function<void(std::shared_ptr<Connection>, std::string)>;
+
     Broker() = default;
     ~Broker() = default;
 
+    void set_outbound_handler(OutboundHandler handler);
     void add_connection(std::shared_ptr<Connection> conn);
     void remove_connection(const std::string& client_id);
     void handle_command(std::shared_ptr<Connection> conn, const Command& cmd);
@@ -25,6 +29,7 @@ private:
     SubscriptionRegistry registry_;
     std::unordered_map<std::string, std::shared_ptr<Connection>> connections_;
     std::mutex broker_mutex_;
+    OutboundHandler outbound_handler_;
 };
 
 }
