@@ -107,6 +107,7 @@ void Server::stop() {
     if (stop_event_fd_ >= 0) {
         uint64_t val = 1;
         ssize_t written = write(stop_event_fd_, &val, sizeof(val));
+        (void)written;
     }
 
     if (event_thread_.joinable()) {
