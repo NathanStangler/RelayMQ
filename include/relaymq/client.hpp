@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <atomic>
 #include <thread>
+#include <optional>
 #include <cstdint>
 
 namespace relaymq {
@@ -34,6 +35,7 @@ public:
     bool publish(const std::string& subject, const std::string& payload, const std::string& reply_to = "");
     std::string subscribe(const std::string& subject, MessageCallback callback);
     bool unsubscribe(const std::string& sid);
+    std::optional<Message> request(const std::string& subject, const std::string& payload, int timeout_ms = 2000);
     int64_t ping(int timeout_ms = 2000);
 
 private:
@@ -44,6 +46,7 @@ private:
     std::mutex send_mutex_;
     std::mutex sub_mutex_;
     std::atomic<uint64_t> next_sid_;
+    std::atomic<uint64_t> next_request_id_;
     std::unordered_map<std::string, MessageCallback> subscriptions_;
     DisconnectCallback disconnect_callback_;
     std::mutex pong_mutex_;

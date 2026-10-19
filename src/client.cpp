@@ -6,10 +6,11 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <chrono>
+#include <future>
 
 namespace relaymq {
 
-Client::Client() : socket_fd_(-1), is_connected_(false), next_sid_(1), awaiting_pong_(false) {}
+Client::Client() : socket_fd_(-1), is_connected_(false), next_sid_(1), next_request_id_(1), awaiting_pong_(false) {}
 
 Client::~Client() {
     disconnect();
@@ -128,6 +129,44 @@ bool Client::unsubscribe(const std::string& sid) {
     return send_raw(msg);
 }
 
+std::optional<Message> Client::request(const std::string& subject, const std::string& payload, int timeout_ms) {
+    if (!is_connected_) {
+        return std::nullopt;
+    }
+
+    uint64_t req_id = next_request_id_++;
+    std::string reply_subject = "_REPLY." + std::to_string(req_id);
+
+    std::shared_ptr<std::promise<Message>> promise = std::make_shared<std::promise<Message>>();
+    std::future<Message> future = promise->get_future();
+    std::shared_ptr<std::atomic<bool>> delivered = std::make_shared<std::atomic<bool>>(false);
+
+    std::string sid = subscribe(reply_subject, [promise, delivered](const Message& msg) {
+        bool expected = false;
+        if (delivered->compare_exchange_strong(expected, true)) {
+            promise->set_value(msg);
+        }
+    });
+
+    if (sid.empty()) {
+        return std::nullopt;
+    }
+
+    if (!publish(subject, payload, reply_subject)) {
+        unsubscribe(sid);
+        return std::nullopt;
+    }
+
+    std::future_status status = future.wait_for(std::chrono::milliseconds(timeout_ms));
+    unsubscribe(sid);
+
+    if (status == std::future_status::ready) {
+        return future.get();
+    }
+
+    return std::nullopt;
+}
+
 int64_t Client::ping(int timeout_ms) {
     if (!is_connected_) {
         return -1;
@@ -156,7 +195,7 @@ int64_t Client::ping(int timeout_ms) {
 }
 
 void Client::receive_loop() {
-    char buffer[4096];
+    char buffer[16384];
 
     while (is_connected_) {
         ssize_t bytes_read = recv(socket_fd_, buffer, sizeof(buffer), 0);
