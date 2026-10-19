@@ -15,7 +15,13 @@ enum class CommandType {
     PING,
     PONG,
     OK,
-    ERR
+    ERR,
+    ROUTE_CONNECT,
+    RSUB,
+    RUNSUB,
+    RMSG,
+    RPING,
+    RPONG
 };
 
 std::string to_string(CommandType type);
@@ -27,6 +33,8 @@ struct Command {
     std::string reply_to;
     std::string payload;
     std::string error_message;
+    std::string cluster_name;
+    std::string node_id;
 };
 
 class ProtocolParser {
@@ -47,6 +55,12 @@ public:
     static std::string format_pong();
     static std::string format_ok();
     static std::string format_err(std::string_view reason);
+    static std::string format_route_connect(std::string_view cluster_name, std::string_view node_id);
+    static std::string format_rsub(std::string_view subject);
+    static std::string format_runsub(std::string_view subject);
+    static std::string format_rmsg(std::string_view subject, std::string_view payload, std::string_view reply_to = "");
+    static std::string format_rping();
+    static std::string format_rpong();
 
 private:
     std::string buffer_;

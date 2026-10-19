@@ -40,6 +40,12 @@ std::string to_string(CommandType type) {
         case CommandType::PONG: return "PONG";
         case CommandType::OK: return "OK";
         case CommandType::ERR: return "ERR";
+        case CommandType::ROUTE_CONNECT: return "ROUTE_CONNECT";
+        case CommandType::RSUB: return "RSUB";
+        case CommandType::RUNSUB: return "RUNSUB";
+        case CommandType::RMSG: return "RMSG";
+        case CommandType::RPING: return "RPING";
+        case CommandType::RPONG: return "RPONG";
         case CommandType::UNKNOWN: return "UNKNOWN";
         default: return "UNKNOWN";
     }
@@ -268,6 +274,120 @@ bool ProtocolParser::next_command(Command& out_cmd) {
             return true;
         }
 
+        if (equals_ignore_case(verb, "ROUTE_CONNECT")) {
+            if (tokens.size() < 3) {
+                buffer_.erase(0, line_end + 2);
+                out_cmd = Command{};
+                out_cmd.type = CommandType::ERR;
+                out_cmd.error_message = "Invalid ROUTE_CONNECT syntax: expected ROUTE_CONNECT <cluster_name> <node_id>";
+                return true;
+            }
+            std::string cname(tokens[1]);
+            std::string nid(tokens[2]);
+            buffer_.erase(0, line_end + 2);
+            out_cmd = Command{};
+            out_cmd.type = CommandType::ROUTE_CONNECT;
+            out_cmd.cluster_name = std::move(cname);
+            out_cmd.node_id = std::move(nid);
+            return true;
+        }
+
+        if (equals_ignore_case(verb, "RSUB")) {
+            if (tokens.size() < 2) {
+                buffer_.erase(0, line_end + 2);
+                out_cmd = Command{};
+                out_cmd.type = CommandType::ERR;
+                out_cmd.error_message = "Invalid RSUB syntax: expected RSUB <subject>";
+                return true;
+            }
+            std::string rsub_subject(tokens[1]);
+            buffer_.erase(0, line_end + 2);
+            out_cmd = Command{};
+            out_cmd.type = CommandType::RSUB;
+            out_cmd.subject = std::move(rsub_subject);
+            return true;
+        }
+
+        if (equals_ignore_case(verb, "RUNSUB")) {
+            if (tokens.size() < 2) {
+                buffer_.erase(0, line_end + 2);
+                out_cmd = Command{};
+                out_cmd.type = CommandType::ERR;
+                out_cmd.error_message = "Invalid RUNSUB syntax: expected RUNSUB <subject>";
+                return true;
+            }
+            std::string runsub_subject(tokens[1]);
+            buffer_.erase(0, line_end + 2);
+            out_cmd = Command{};
+            out_cmd.type = CommandType::RUNSUB;
+            out_cmd.subject = std::move(runsub_subject);
+            return true;
+        }
+
+        if (equals_ignore_case(verb, "RMSG")) {
+            if (tokens.size() < 3) {
+                buffer_.erase(0, line_end + 2);
+                out_cmd = Command{};
+                out_cmd.type = CommandType::ERR;
+                out_cmd.error_message = "Invalid RMSG syntax: expected RMSG <subject> [reply-to] <bytes>";
+                return true;
+            }
+
+            std::string_view subject = tokens[1];
+            std::string_view reply_to;
+            size_t payload_len = 0;
+
+            if (tokens.size() == 3) {
+                if (!parse_uint64(tokens[2], payload_len)) {
+                    buffer_.erase(0, line_end + 2);
+                    out_cmd = Command{};
+                    out_cmd.type = CommandType::ERR;
+                    out_cmd.error_message = "Invalid byte length in RMSG command";
+                    return true;
+                }
+            } else {
+                reply_to = tokens[2];
+                if (!parse_uint64(tokens[3], payload_len)) {
+                    buffer_.erase(0, line_end + 2);
+                    out_cmd = Command{};
+                    out_cmd.type = CommandType::ERR;
+                    out_cmd.error_message = "Invalid byte length in RMSG command";
+                    return true;
+                }
+            }
+
+            size_t total_required = line_end + payload_len + 4;
+            if (buffer_.size() < total_required) {
+                return false;
+            }
+
+            std::string rmsg_subject(subject);
+            std::string rmsg_reply_to(reply_to);
+            std::string payload = buffer_.substr(line_end + 2, payload_len);
+            buffer_.erase(0, total_required);
+
+            out_cmd = Command{};
+            out_cmd.type = CommandType::RMSG;
+            out_cmd.subject = std::move(rmsg_subject);
+            out_cmd.reply_to = std::move(rmsg_reply_to);
+            out_cmd.payload = std::move(payload);
+            return true;
+        }
+
+        if (equals_ignore_case(verb, "RPING")) {
+            buffer_.erase(0, line_end + 2);
+            out_cmd = Command{};
+            out_cmd.type = CommandType::RPING;
+            return true;
+        }
+
+        if (equals_ignore_case(verb, "RPONG")) {
+            buffer_.erase(0, line_end + 2);
+            out_cmd = Command{};
+            out_cmd.type = CommandType::RPONG;
+            return true;
+        }
+
         std::string unknown_verb(tokens[0]);
         buffer_.erase(0, line_end + 2);
         out_cmd = Command{};
@@ -364,6 +484,66 @@ std::string ProtocolParser::format_err(std::string_view reason) {
     out.append(reason);
     out.append("\r\n");
     return out;
+}
+
+std::string ProtocolParser::format_route_connect(std::string_view cluster_name, std::string_view node_id) {
+    std::string out;
+    out.reserve(cluster_name.size() + node_id.size() + 17);
+    out.append("ROUTE_CONNECT ");
+    out.append(cluster_name);
+    out.append(" ");
+    out.append(node_id);
+    out.append("\r\n");
+    return out;
+}
+
+std::string ProtocolParser::format_rsub(std::string_view subject) {
+    std::string out;
+    out.reserve(subject.size() + 7);
+    out.append("RSUB ");
+    out.append(subject);
+    out.append("\r\n");
+    return out;
+}
+
+std::string ProtocolParser::format_runsub(std::string_view subject) {
+    std::string out;
+    out.reserve(subject.size() + 9);
+    out.append("RUNSUB ");
+    out.append(subject);
+    out.append("\r\n");
+    return out;
+}
+
+std::string ProtocolParser::format_rmsg(std::string_view subject, std::string_view payload, std::string_view reply_to) {
+    std::string out;
+    std::string size_str = std::to_string(payload.size());
+    size_t total_len = subject.size() + size_str.size() + payload.size() + 10;
+    if (!reply_to.empty()) {
+        total_len += reply_to.size() + 1;
+    }
+    out.reserve(total_len);
+
+    out.append("RMSG ");
+    out.append(subject);
+    out.append(" ");
+    if (!reply_to.empty()) {
+        out.append(reply_to);
+        out.append(" ");
+    }
+    out.append(size_str);
+    out.append("\r\n");
+    out.append(payload);
+    out.append("\r\n");
+    return out;
+}
+
+std::string ProtocolParser::format_rping() {
+    return "RPING\r\n";
+}
+
+std::string ProtocolParser::format_rpong() {
+    return "RPONG\r\n";
 }
 
 }
