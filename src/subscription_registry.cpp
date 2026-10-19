@@ -1,6 +1,5 @@
 #include "relaymq/subscription_registry.hpp"
 #include <algorithm>
-#include <sstream>
 
 namespace relaymq {
 
@@ -8,44 +7,51 @@ SubscriptionRegistry::SubscriptionRegistry() : root_(std::make_unique<Node>()), 
 
 SubscriptionRegistry::~SubscriptionRegistry() = default;
 
-std::vector<std::string> SubscriptionRegistry::tokenize(const std::string& subject) {
-    std::vector<std::string> tokens;
-    std::string token;
-    std::istringstream stream(subject);
-
-    while (std::getline(stream, token, '.')) {
-        tokens.push_back(token);
+std::vector<std::string_view> SubscriptionRegistry::tokenize(std::string_view subject) {
+    std::vector<std::string_view> tokens;
+    if (subject.empty()) {
+        return tokens;
     }
+
+    size_t start = 0;
+    size_t end = subject.find('.');
+
+    while (end != std::string_view::npos) {
+        tokens.push_back(subject.substr(start, end - start));
+        start = end + 1;
+        end = subject.find('.', start);
+    }
+    tokens.push_back(subject.substr(start));
     return tokens;
 }
 
-bool SubscriptionRegistry::is_valid_subject(const std::string& subject) {
+bool SubscriptionRegistry::is_valid_subject(std::string_view subject) {
     if (subject.empty() || subject.front() == '.' || subject.back() == '.') {
         return false;
     }
 
-    if (subject.find("..") != std::string::npos) {
+    if (subject.find("..") != std::string_view::npos) {
         return false;
     }
 
-    std::vector<std::string> tokens = tokenize(subject);
+    std::vector<std::string_view> tokens = tokenize(subject);
     if (tokens.empty()) {
         return false;
     }
 
     for (size_t i = 0; i < tokens.size(); i++) {
-        const std::string& t = tokens[i];
+        std::string_view t = tokens[i];
         if (t.empty()) {
             return false;
         }
 
-        if (t.find('>') != std::string::npos) {
+        if (t.find('>') != std::string_view::npos) {
             if (t != ">" || i != tokens.size() - 1) {
                 return false;
             }
         }
 
-        if (t.find('*') != std::string::npos && t != "*") {
+        if (t.find('*') != std::string_view::npos && t != "*") {
             return false;
         }
     }
@@ -58,11 +64,11 @@ void SubscriptionRegistry::add_subscription(const std::string& subject, const st
         return;
     }
 
-    std::vector<std::string> tokens = tokenize(subject);
+    std::vector<std::string_view> tokens = tokenize(subject);
     Node* current = root_.get();
 
     for (size_t i = 0; i < tokens.size(); i++) {
-        const std::string& token = tokens[i];
+        std::string_view token = tokens[i];
 
         if (token == ">") {
             Subscription sub{client_id, sid, subject};
@@ -77,10 +83,11 @@ void SubscriptionRegistry::add_subscription(const std::string& subject, const st
             }
             current = current->single_wildcard_child.get();
         } else {
-            auto it = current->literal_children.find(token);
+            std::string key(token);
+            auto it = current->literal_children.find(key);
             if (it == current->literal_children.end()) {
-                current->literal_children[token] = std::make_unique<Node>();
-                current = current->literal_children[token].get();
+                current->literal_children[key] = std::make_unique<Node>();
+                current = current->literal_children[key].get();
             } else {
                 current = it->second.get();
             }
@@ -166,18 +173,18 @@ void SubscriptionRegistry::remove_client_recursive(Node* current, const std::str
     }
 }
 
-std::vector<Subscription> SubscriptionRegistry::match(const std::string& publish_subject) const {
+std::vector<Subscription> SubscriptionRegistry::match(std::string_view publish_subject) const {
     std::vector<Subscription> results;
     if (publish_subject.empty()) {
         return results;
     }
 
-    const std::vector<std::string> tokens = tokenize(publish_subject);
+    const std::vector<std::string_view> tokens = tokenize(publish_subject);
     match_recursive(root_.get(), tokens, 0, results);
     return results;
 }
 
-void SubscriptionRegistry::match_recursive(const Node* current, const std::vector<std::string>& tokens, size_t token_index, std::vector<Subscription>& results) const {
+void SubscriptionRegistry::match_recursive(const Node* current, const std::vector<std::string_view>& tokens, size_t token_index, std::vector<Subscription>& results) const {
     if (!current) {
         return;
     }
@@ -195,9 +202,9 @@ void SubscriptionRegistry::match_recursive(const Node* current, const std::vecto
         return;
     }
 
-    const std::string& token = tokens[token_index];
+    std::string_view token = tokens[token_index];
 
-    auto it = current->literal_children.find(token);
+    auto it = current->literal_children.find(std::string(token));
     if (it != current->literal_children.end()) {
         match_recursive(it->second.get(), tokens, token_index + 1, results);
     }

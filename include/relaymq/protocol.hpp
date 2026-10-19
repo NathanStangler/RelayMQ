@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace relaymq {
@@ -38,19 +39,19 @@ public:
     void clear();
     size_t buffered_bytes() const;
 
-    static std::string format_pub(const std::string& subject, const std::string& payload, const std::string& reply_to = "");
-    static std::string format_sub(const std::string& subject, const std::string& sid);
-    static std::string format_unsub(const std::string& sid);
-    static std::string format_msg(const std::string& subject, const std::string& sid, const std::string& payload, const std::string& reply_to = "");
+    static std::string format_pub(std::string_view subject, std::string_view payload, std::string_view reply_to = "");
+    static std::string format_sub(std::string_view subject, std::string_view sid);
+    static std::string format_unsub(std::string_view sid);
+    static std::string format_msg(std::string_view subject, std::string_view sid, std::string_view payload, std::string_view reply_to = "");
     static std::string format_ping();
     static std::string format_pong();
     static std::string format_ok();
-    static std::string format_err(const std::string& reason);
+    static std::string format_err(std::string_view reason);
 
 private:
     std::string buffer_;
 
-    static std::vector<std::string> split_tokens(const std::string& line);
+    static std::vector<std::string_view> split_tokens(std::string_view line);
 };
 
 }
