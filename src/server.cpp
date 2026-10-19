@@ -1,16 +1,19 @@
 #include "relaymq/server.hpp"
 
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/socket.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <cstring>
-#include <iostream>
+#include <cerrno>
 
 namespace relaymq {
 
-Server::Server() : server_fd_(-1), port_(0), is_running_(false), next_client_id_(1) {}
+Server::Server() : server_fd_(-1), epoll_fd_(-1), stop_event_fd_(-1), port_(0), is_running_(false), next_client_id_(1) {}
 
 Server::~Server() {
     stop();
@@ -28,6 +31,9 @@ bool Server::start(uint16_t port) {
 
     int opt = 1;
     setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    int flags = fcntl(server_fd_, F_GETFL, 0);
+    fcntl(server_fd_, F_SETFL, flags | O_NONBLOCK);
 
     sockaddr_in server_addr{};
     server_addr.sin_family = AF_INET;
@@ -53,8 +59,34 @@ bool Server::start(uint16_t port) {
         port_ = port;
     }
 
+    epoll_fd_ = epoll_create1(0);
+    if (epoll_fd_ < 0) {
+        close(server_fd_);
+        server_fd_ = -1;
+        return false;
+    }
+
+    stop_event_fd_ = eventfd(0, EFD_NONBLOCK);
+    if (stop_event_fd_ < 0) {
+        close(epoll_fd_);
+        close(server_fd_);
+        epoll_fd_ = -1;
+        server_fd_ = -1;
+        return false;
+    }
+
+    epoll_event server_ev{};
+    server_ev.events = EPOLLIN;
+    server_ev.data.fd = server_fd_;
+    epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, server_fd_, &server_ev);
+
+    epoll_event stop_ev{};
+    stop_ev.events = EPOLLIN;
+    stop_ev.data.fd = stop_event_fd_;
+    epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, stop_event_fd_, &stop_ev);
+
     is_running_ = true;
-    accept_thread_ = std::thread(&Server::accept_loop, this);
+    event_thread_ = std::thread(&Server::event_loop, this);
     return true;
 }
 
@@ -65,6 +97,25 @@ void Server::stop() {
 
     is_running_ = false;
 
+    if (stop_event_fd_ >= 0) {
+        uint64_t val = 1;
+        ssize_t written = write(stop_event_fd_, &val, sizeof(val));
+    }
+
+    if (event_thread_.joinable()) {
+        event_thread_.join();
+    }
+
+    if (epoll_fd_ >= 0) {
+        close(epoll_fd_);
+        epoll_fd_ = -1;
+    }
+
+    if (stop_event_fd_ >= 0) {
+        close(stop_event_fd_);
+        stop_event_fd_ = -1;
+    }
+
     if (server_fd_ >= 0) {
         shutdown(server_fd_, SHUT_RDWR);
         close(server_fd_);
@@ -72,18 +123,7 @@ void Server::stop() {
     }
 
     broker_.close_all_connections();
-
-    if (accept_thread_.joinable()) {
-        accept_thread_.join();
-    }
-
-    std::lock_guard<std::mutex> lock(threads_mutex_);
-    for (size_t i = 0; i < client_threads_.size(); i++) {
-        if (client_threads_[i].joinable()) {
-            client_threads_[i].join();
-        }
-    }
-    client_threads_.clear();
+    clients_.clear();
 }
 
 bool Server::is_running() const {
@@ -98,17 +138,49 @@ Broker& Server::broker() {
     return broker_;
 }
 
-void Server::accept_loop() {
+void Server::event_loop() {
+    epoll_event events[64];
+
+    while (is_running_) {
+        int num_ready = epoll_wait(epoll_fd_, events, 64, -1);
+        if (num_ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+
+        for (int i = 0; i < num_ready; i++) {
+            int fd = events[i].data.fd;
+            uint32_t ev_flags = events[i].events;
+
+            if (fd == stop_event_fd_) {
+                break;
+            }
+
+            if (fd == server_fd_) {
+                accept_connection();
+            } else {
+                handle_client(fd, ev_flags);
+            }
+        }
+    }
+}
+
+void Server::accept_connection() {
     while (is_running_) {
         sockaddr_in client_addr{};
         socklen_t client_len = sizeof(client_addr);
 
-        int client_fd = accept(server_fd_, reinterpret_cast<struct sockaddr*>(&client_addr), &client_len);
+        int client_fd = accept4(server_fd_, reinterpret_cast<struct sockaddr*>(&client_addr), &client_len, SOCK_NONBLOCK);
         if (client_fd < 0) {
-            if (!is_running_) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
             }
-            continue;
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
         }
 
         int nodelay = 1;
@@ -119,31 +191,54 @@ void Server::accept_loop() {
 
         std::shared_ptr<Connection> conn = std::make_shared<Connection>(client_fd, client_id);
         broker_.add_connection(conn);
+        clients_[client_fd] = conn;
 
-        std::lock_guard<std::mutex> lock(threads_mutex_);
-        client_threads_.push_back(std::thread(&Server::handle_client, this, conn));
+        epoll_event ev{};
+        ev.events = EPOLLIN | EPOLLRDHUP;
+        ev.data.fd = client_fd;
+        epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, client_fd, &ev);
     }
 }
 
-void Server::handle_client(std::shared_ptr<Connection> conn) {
-    char buffer[4096];
+void Server::handle_client(int client_fd, uint32_t events) {
+    auto it = clients_.find(client_fd);
+    if (it == clients_.end()) {
+        return;
+    }
+    std::shared_ptr<Connection> conn = it->second;
 
-    while (is_running_ && conn->is_open()) {
-        ssize_t bytes_read = recv(conn->socket_fd(), buffer, sizeof(buffer), 0);
-        if (bytes_read <= 0) {
-            break;
-        }
+    if (events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
+        remove_client(client_fd);
+        return;
+    }
 
+    char buffer[16384];
+    ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer), MSG_DONTWAIT);
+    if (bytes_read > 0) {
         conn->parser().append(buffer, static_cast<size_t>(bytes_read));
-
         Command cmd;
         while (conn->parser().next_command(cmd)) {
             broker_.handle_command(conn, cmd);
         }
+    } else if (bytes_read == 0) {
+        remove_client(client_fd);
+    } else {
+        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            remove_client(client_fd);
+        }
     }
+}
 
-    broker_.remove_connection(conn->id());
-    conn->close_connection();
+void Server::remove_client(int client_fd) {
+    auto it = clients_.find(client_fd);
+    if (it != clients_.end()) {
+        std::shared_ptr<Connection> conn = it->second;
+        clients_.erase(it);
+
+        epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, client_fd, nullptr);
+        broker_.remove_connection(conn->id());
+        conn->close_connection();
+    }
 }
 
 }

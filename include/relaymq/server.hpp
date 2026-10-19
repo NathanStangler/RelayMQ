@@ -3,7 +3,8 @@
 #include "relaymq/broker.hpp"
 #include <atomic>
 #include <thread>
-#include <vector>
+#include <unordered_map>
+#include <memory>
 #include <cstdint>
 
 namespace relaymq {
@@ -21,16 +22,19 @@ public:
 
 private:
     int server_fd_;
+    int epoll_fd_;
+    int stop_event_fd_;
     uint16_t port_;
     std::atomic<bool> is_running_;
     Broker broker_;
-    std::thread accept_thread_;
-    std::vector<std::thread> client_threads_;
-    std::mutex threads_mutex_;
+    std::thread event_thread_;
+    std::unordered_map<int, std::shared_ptr<Connection>> clients_;
     std::atomic<uint64_t> next_client_id_;
 
-    void accept_loop();
-    void handle_client(std::shared_ptr<Connection> conn);
+    void event_loop();
+    void accept_connection();
+    void handle_client(int client_fd, uint32_t events);
+    void remove_client(int client_fd);
 };
 
 }
