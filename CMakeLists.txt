@@ -26,6 +26,10 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_library(relaymq_core
     src/protocol.cpp
     src/subscription_registry.cpp
+    src/connection.cpp
+    src/broker.cpp
+    src/server.cpp
+    src/client.cpp
 )
 target_include_directories(relaymq_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -64,6 +68,7 @@ FetchContent_MakeAvailable(googletest)
 add_executable(relaymq_tests
     tests/test_protocol.cpp
     tests/test_subscription_registry.cpp
+    tests/test_server.cpp
 )
 target_link_libraries(relaymq_tests PRIVATE
     relaymq_core
