@@ -53,6 +53,13 @@ target_link_libraries(relay-cli PRIVATE
     relaymq_core
 )
 
+add_executable(relay-bench
+    benchmarks/bench_main.cpp
+)
+target_link_libraries(relay-bench PRIVATE
+    relaymq_core
+)
+
 enable_testing()
 include(FetchContent)
 FetchContent_Declare(
