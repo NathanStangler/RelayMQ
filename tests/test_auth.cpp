@@ -1,14 +1,8 @@
 #include "relaymq/server.hpp"
-#include "relaymq/client.hpp"
-#include "relaymq/net.hpp"
-
+#include "test_socket.hpp"
 #include <gtest/gtest.h>
-#include <sys/socket.h>
 #include <chrono>
 #include <thread>
-#include <mutex>
-#include <condition_variable>
-#include <atomic>
 
 TEST(AuthTest, AllowUnauthenticated) {
     relaymq::Server server;
@@ -16,34 +10,20 @@ TEST(AuthTest, AllowUnauthenticated) {
     config.port = 0;
     ASSERT_TRUE(server.start(config));
 
-    relaymq::Client client;
-    ASSERT_TRUE(client.connect("127.0.0.1", server.port()));
+    relaymq::test::TestSocket sub;
+    ASSERT_TRUE(sub.connect(server.port()));
+    ASSERT_TRUE(sub.send("SUB service.auth.open 1\r\n"));
+    EXPECT_EQ(sub.read_line(), "OK\r\n");
 
-    std::mutex cv_mutex;
-    std::condition_variable cv;
-    bool received = false;
-    std::string received_payload;
+    relaymq::test::TestSocket pub;
+    ASSERT_TRUE(pub.connect(server.port()));
+    ASSERT_TRUE(pub.send("PUB service.auth.open 5\r\nstart\r\n"));
 
-    client.subscribe("service.auth.open", [&](const relaymq::Message& msg) {
-        std::unique_lock<std::mutex> lock(cv_mutex);
-        received = true;
-        received_payload = msg.payload;
-        lock.unlock();
-        cv.notify_one();
-    });
+    EXPECT_EQ(sub.read_line(), "MSG service.auth.open 1 5\r\n");
+    EXPECT_EQ(sub.read_line(), "start\r\n");
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    client.publish("service.auth.open", "start");
-
-    std::unique_lock<std::mutex> lock(cv_mutex);
-    bool ok = cv.wait_for(lock, std::chrono::seconds(2), [&]() {
-        return received;
-    });
-
-    EXPECT_TRUE(ok);
-    EXPECT_EQ(received_payload, "start");
-
-    client.disconnect();
+    sub.close();
+    pub.close();
     server.stop();
 }
 
@@ -54,34 +34,24 @@ TEST(AuthTest, TokenAuthSuccess) {
     config.auth_token = "valid_secret_token";
     ASSERT_TRUE(server.start(config));
 
-    relaymq::Client client;
-    ASSERT_TRUE(client.connect("127.0.0.1", server.port(), "valid_secret_token"));
+    relaymq::test::TestSocket sub;
+    ASSERT_TRUE(sub.connect(server.port()));
+    ASSERT_TRUE(sub.send("AUTH valid_secret_token\r\n"));
+    EXPECT_EQ(sub.read_line(), "OK\r\n");
+    ASSERT_TRUE(sub.send("SUB service.auth.secured 1\r\n"));
+    EXPECT_EQ(sub.read_line(), "OK\r\n");
 
-    std::mutex cv_mutex;
-    std::condition_variable cv;
-    bool received = false;
-    std::string received_payload;
+    relaymq::test::TestSocket pub;
+    ASSERT_TRUE(pub.connect(server.port()));
+    ASSERT_TRUE(pub.send("AUTH valid_secret_token\r\n"));
+    EXPECT_EQ(pub.read_line(), "OK\r\n");
+    ASSERT_TRUE(pub.send("PUB service.auth.secured 6\r\nsecure\r\n"));
 
-    client.subscribe("service.auth.secured", [&](const relaymq::Message& msg) {
-        std::unique_lock<std::mutex> lock(cv_mutex);
-        received = true;
-        received_payload = msg.payload;
-        lock.unlock();
-        cv.notify_one();
-    });
+    EXPECT_EQ(sub.read_line(), "MSG service.auth.secured 1 6\r\n");
+    EXPECT_EQ(sub.read_line(), "secure\r\n");
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    client.publish("service.auth.secured", "secure");
-
-    std::unique_lock<std::mutex> lock(cv_mutex);
-    bool ok = cv.wait_for(lock, std::chrono::seconds(2), [&]() {
-        return received;
-    });
-
-    EXPECT_TRUE(ok);
-    EXPECT_EQ(received_payload, "secure");
-
-    client.disconnect();
+    sub.close();
+    pub.close();
     server.stop();
 }
 
@@ -92,11 +62,15 @@ TEST(AuthTest, TokenAuthInvalidRejected) {
     config.auth_token = "correct_token";
     ASSERT_TRUE(server.start(config));
 
-    relaymq::Client client;
-    bool connected = client.connect("127.0.0.1", server.port(), "wrong_token");
-    EXPECT_FALSE(connected);
-    EXPECT_FALSE(client.is_connected());
+    relaymq::test::TestSocket conn;
+    ASSERT_TRUE(conn.connect(server.port()));
+    ASSERT_TRUE(conn.send("AUTH wrong_token\r\n"));
 
+    std::string err = conn.read_line();
+    EXPECT_TRUE(err.starts_with("ERR "));
+    EXPECT_TRUE(conn.read_line(100).empty());
+
+    conn.close();
     server.stop();
 }
 
@@ -107,31 +81,15 @@ TEST(AuthTest, UnauthenticatedCommandRejected) {
     config.auth_token = "required_token";
     ASSERT_TRUE(server.start(config));
 
-    relaymq::Client client;
-    bool connected = client.connect("127.0.0.1", server.port(), "");
-    EXPECT_TRUE(connected);
+    relaymq::test::TestSocket conn;
+    ASSERT_TRUE(conn.connect(server.port()));
+    ASSERT_TRUE(conn.send("PUB unauthorized.topic 4\r\ndata\r\n"));
 
-    std::mutex cv_mutex;
-    std::condition_variable cv;
-    std::atomic<bool> disconnected{false};
+    std::string err = conn.read_line();
+    EXPECT_TRUE(err.starts_with("ERR "));
+    EXPECT_TRUE(conn.read_line(100).empty());
 
-    client.set_disconnect_callback([&]() {
-        disconnected = true;
-        std::unique_lock<std::mutex> lock(cv_mutex);
-        cv.notify_one();
-    });
-
-    client.publish("unauthorized.topic", "data");
-
-    std::unique_lock<std::mutex> lock(cv_mutex);
-    bool ok = cv.wait_for(lock, std::chrono::seconds(2), [&]() {
-        return disconnected.load();
-    });
-
-    EXPECT_TRUE(ok);
-    EXPECT_FALSE(client.is_connected());
-
-    client.disconnect();
+    conn.close();
     server.stop();
 }
 
@@ -211,15 +169,13 @@ TEST(AuthTest, AuthTimeoutDisconnect) {
     config.auth_timeout_ms = 100;
     ASSERT_TRUE(server.start(config));
 
-    int raw_fd = relaymq::net::connect_tcp("127.0.0.1", server.port(), false);
-    ASSERT_GE(raw_fd, 0);
+    relaymq::test::TestSocket conn;
+    ASSERT_TRUE(conn.connect(server.port()));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(700));
 
-    char buf[64];
-    ssize_t bytes = recv(raw_fd, buf, sizeof(buf), MSG_DONTWAIT);
-    EXPECT_LE(bytes, 0);
+    EXPECT_TRUE(conn.read_line(100).empty());
 
-    relaymq::net::close_socket(raw_fd);
+    conn.close();
     server.stop();
 }

@@ -116,7 +116,7 @@ void Broker::deliver_local(const std::string& subject, const std::string& payloa
     lock.unlock();
 
     for (size_t i = 0; i < pending_msgs.size(); i++) {
-        outbound_handler_(pending_msgs[i].first, std::move(pending_msgs[i].second));
+        outbound_handler_(pending_msgs[i].first, std::move(pending_msgs[i].second), false);
     }
 }
 
@@ -153,14 +153,12 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
                     if (matched_acl) {
                         conn->set_acl(matched_acl);
                     }
-                    outbound_handler_(conn, ProtocolParser::format_ok());
+                    outbound_handler_(conn, ProtocolParser::format_ok(), false);
                 } else {
-                    outbound_handler_(conn, ProtocolParser::format_err("Invalid Credentials"));
-                    conn->close_connection();
+                    outbound_handler_(conn, ProtocolParser::format_err("Invalid Credentials"), true);
                 }
             } else {
-                outbound_handler_(conn, ProtocolParser::format_err("Authorization Violation"));
-                conn->close_connection();
+                outbound_handler_(conn, ProtocolParser::format_err("Authorization Violation"), true);
             }
             return;
         }
@@ -189,9 +187,9 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
             if (matched_acl) {
                 conn->set_acl(matched_acl);
             }
-            outbound_handler_(conn, ProtocolParser::format_ok());
+            outbound_handler_(conn, ProtocolParser::format_ok(), false);
         } else {
-            outbound_handler_(conn, ProtocolParser::format_err("Invalid Credentials"));
+            outbound_handler_(conn, ProtocolParser::format_err("Invalid Credentials"), false);
         }
         return;
     }
@@ -199,7 +197,7 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
     switch (cmd.type) {
         case CommandType::PUB: {
             if (!conn->acl().can_publish(cmd.subject)) {
-                outbound_handler_(conn, ProtocolParser::format_err("Permission Violation: Publish to " + cmd.subject + " denied"));
+                outbound_handler_(conn, ProtocolParser::format_err("Permission Violation: Publish to " + cmd.subject + " denied"), false);
                 break;
             }
 
@@ -217,12 +215,12 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
         }
         case CommandType::SUB: {
             if (!conn->acl().can_subscribe(cmd.subject)) {
-                outbound_handler_(conn, ProtocolParser::format_err("Permission Violation: Subscribe to " + cmd.subject + " denied"));
+                outbound_handler_(conn, ProtocolParser::format_err("Permission Violation: Subscribe to " + cmd.subject + " denied"), false);
                 break;
             }
 
             if (!SubscriptionRegistry::is_valid_subject(cmd.subject)) {
-                outbound_handler_(conn, ProtocolParser::format_err("Invalid subject"));
+                outbound_handler_(conn, ProtocolParser::format_err("Invalid subject"), false);
                 break;
             }
 
@@ -239,7 +237,7 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
             if (should_broadcast && cluster_broadcast_handler_) {
                 cluster_broadcast_handler_(ProtocolParser::format_rsub(cmd.subject));
             }
-            outbound_handler_(conn, ProtocolParser::format_ok());
+            outbound_handler_(conn, ProtocolParser::format_ok(), false);
             break;
         }
         case CommandType::UNSUB: {
@@ -263,11 +261,11 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
             if (should_broadcast && cluster_broadcast_handler_) {
                 cluster_broadcast_handler_(ProtocolParser::format_runsub(unsub_subject));
             }
-            outbound_handler_(conn, ProtocolParser::format_ok());
+            outbound_handler_(conn, ProtocolParser::format_ok(), false);
             break;
         }
         case CommandType::PING: {
-            outbound_handler_(conn, ProtocolParser::format_pong());
+            outbound_handler_(conn, ProtocolParser::format_pong(), false);
             break;
         }
         case CommandType::PONG:

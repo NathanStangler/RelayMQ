@@ -1,13 +1,8 @@
 #include "relaymq/server.hpp"
-#include "relaymq/client.hpp"
+#include "test_socket.hpp"
 #include "relaymq/acl.hpp"
 
 #include <gtest/gtest.h>
-#include <chrono>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
-#include <atomic>
 
 TEST(AclTest, UnrestrictedAccess) {
     relaymq::SubjectAcl acl(true);
@@ -93,63 +88,30 @@ TEST(AclTest, ScopedPublishSubscribe) {
 
     ASSERT_TRUE(server.start(config));
 
-    relaymq::Client sub_client;
-    std::mutex err_mutex;
-    std::condition_variable err_cv;
-    std::string received_error;
+    relaymq::test::TestSocket sub;
+    ASSERT_TRUE(sub.connect(server.port()));
+    ASSERT_TRUE(sub.send("AUTH consumer_token\r\n"));
+    EXPECT_EQ(sub.read_line(), "OK\r\n");
+    ASSERT_TRUE(sub.send("SUB service.events.created 1\r\n"));
+    EXPECT_EQ(sub.read_line(), "OK\r\n");
 
-    sub_client.set_error_callback([&](const std::string& err) {
-        std::unique_lock<std::mutex> lock(err_mutex);
-        received_error = err;
-        lock.unlock();
-        err_cv.notify_one();
-    });
+    ASSERT_TRUE(sub.send("PUB service.events.created 20\r\nunauthorized_payload\r\n"));
 
-    ASSERT_TRUE(sub_client.connect("127.0.0.1", server.port(), "consumer_token"));
+    std::string err = sub.read_line();
+    EXPECT_TRUE(err.starts_with("ERR "));
+    EXPECT_NE(err.find("Permission Violation"), std::string::npos);
 
-    std::mutex cv_mutex;
-    std::condition_variable cv;
-    bool received = false;
-    std::string received_payload;
+    relaymq::test::TestSocket pub;
+    ASSERT_TRUE(pub.connect(server.port()));
+    ASSERT_TRUE(pub.send("AUTH worker_token\r\n"));
+    EXPECT_EQ(pub.read_line(), "OK\r\n");
+    ASSERT_TRUE(pub.send("PUB service.events.created 9\r\njob_id=20\r\n"));
 
-    std::string sid = sub_client.subscribe("service.events.created", [&](const relaymq::Message& msg) {
-        std::unique_lock<std::mutex> lock(cv_mutex);
-        received = true;
-        received_payload = msg.payload;
-        lock.unlock();
-        cv.notify_one();
-    });
-    EXPECT_FALSE(sid.empty());
+    EXPECT_EQ(sub.read_line(), "MSG service.events.created 1 9\r\n");
+    EXPECT_EQ(sub.read_line(), "job_id=20\r\n");
 
-    sub_client.publish("service.events.created", "unauthorized_payload");
-
-    std::unique_lock<std::mutex> err_lock(err_mutex);
-    bool got_err = err_cv.wait_for(err_lock, std::chrono::seconds(2), [&]() {
-        return !received_error.empty();
-    });
-    EXPECT_TRUE(got_err);
-    EXPECT_NE(received_error.find("Permission Violation"), std::string::npos);
-    EXPECT_NE(sub_client.last_error().find("Permission Violation"), std::string::npos);
-
-    relaymq::Client pub_client;
-    ASSERT_TRUE(pub_client.connect("127.0.0.1", server.port(), "worker_token"));
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    EXPECT_TRUE(pub_client.publish("service.events.created", "job_id=20"));
-
-    std::unique_lock<std::mutex> lock(cv_mutex);
-    bool ok = cv.wait_for(lock, std::chrono::seconds(2), [&]() {
-        return received;
-    });
-
-    EXPECT_TRUE(ok);
-    EXPECT_EQ(received_payload, "job_id=20");
-
-    EXPECT_TRUE(sub_client.is_connected());
-    EXPECT_TRUE(pub_client.is_connected());
-
-    sub_client.disconnect();
-    pub_client.disconnect();
+    sub.close();
+    pub.close();
     server.stop();
 }
 
@@ -166,30 +128,18 @@ TEST(AclTest, UnrestrictedAdmin) {
 
     ASSERT_TRUE(server.start(config));
 
-    relaymq::Client admin_client;
-    ASSERT_TRUE(admin_client.connect("127.0.0.1", server.port(), "admin_token"));
+    relaymq::test::TestSocket admin;
+    ASSERT_TRUE(admin.connect(server.port()));
+    ASSERT_TRUE(admin.send("AUTH admin_token\r\n"));
+    EXPECT_EQ(admin.read_line(), "OK\r\n");
+    ASSERT_TRUE(admin.send("SUB service.internal.audit 1\r\n"));
+    EXPECT_EQ(admin.read_line(), "OK\r\n");
 
-    std::mutex cv_mutex;
-    std::condition_variable cv;
-    bool received = false;
+    ASSERT_TRUE(admin.send("PUB service.internal.audit 13\r\nadmin_payload\r\n"));
 
-    admin_client.subscribe("service.internal.audit", [&](const relaymq::Message&) {
-        std::unique_lock<std::mutex> lock(cv_mutex);
-        received = true;
-        lock.unlock();
-        cv.notify_one();
-    });
+    EXPECT_EQ(admin.read_line(), "MSG service.internal.audit 1 13\r\n");
+    EXPECT_EQ(admin.read_line(), "admin_payload\r\n");
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    admin_client.publish("service.internal.audit", "admin_payload");
-
-    std::unique_lock<std::mutex> lock(cv_mutex);
-    bool ok = cv.wait_for(lock, std::chrono::seconds(2), [&]() {
-        return received;
-    });
-
-    EXPECT_TRUE(ok);
-
-    admin_client.disconnect();
+    admin.close();
     server.stop();
 }

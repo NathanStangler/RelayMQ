@@ -12,6 +12,7 @@ namespace relaymq {
 struct OutboundMessage {
     std::shared_ptr<Connection> conn;
     std::string data;
+    bool close_after = false;
 };
 
 class OutboundWriter {
@@ -24,7 +25,7 @@ public:
 
     void start();
     void stop();
-    bool enqueue(std::shared_ptr<Connection> conn, std::string data);
+    bool enqueue(std::shared_ptr<Connection> conn, std::string data, bool close_after = false);
 
 private:
     SpscQueue<OutboundMessage, 65536> queue_;

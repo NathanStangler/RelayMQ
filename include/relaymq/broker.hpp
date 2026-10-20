@@ -14,7 +14,7 @@ namespace relaymq {
 
 class Broker {
 public:
-    using OutboundHandler = std::function<void(std::shared_ptr<Connection>, std::string)>;
+    using OutboundHandler = std::function<void(std::shared_ptr<Connection>, std::string, bool close_after)>;
     using ClusterBroadcastHandler = std::function<void(std::string_view)>;
     using RouteMsgHandler = std::function<void(const std::string& subject, const std::string& payload, const std::string& reply_to)>;
 

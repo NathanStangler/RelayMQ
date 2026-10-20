@@ -82,8 +82,8 @@ bool Server::start(const ServerConfig& config) {
 
     writer_.start();
 
-    broker_.set_outbound_handler([this](std::shared_ptr<Connection> conn, std::string data) {
-        writer_.enqueue(std::move(conn), std::move(data));
+    broker_.set_outbound_handler([this](std::shared_ptr<Connection> conn, std::string data, bool close_after) {
+        writer_.enqueue(std::move(conn), std::move(data), close_after);
     });
 
     broker_.set_cluster_broadcast_handler([this](std::string_view data) {

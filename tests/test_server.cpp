@@ -1,8 +1,6 @@
 #include "relaymq/server.hpp"
-#include "relaymq/client.hpp"
+#include "test_socket.hpp"
 #include <gtest/gtest.h>
-#include <future>
-#include <chrono>
 
 class ServerTest : public testing::Test {
 protected:
@@ -23,88 +21,69 @@ protected:
 };
 
 TEST_F(ServerTest, PingPong) {
-    relaymq::Client client;
-    ASSERT_TRUE(client.connect("127.0.0.1", port_));
+    relaymq::test::TestSocket client;
+    ASSERT_TRUE(client.connect(port_));
     EXPECT_TRUE(client.is_connected());
 
-    int64_t latency = client.ping();
-    EXPECT_GE(latency, 0);
+    ASSERT_TRUE(client.send("PING\r\n"));
+    EXPECT_EQ(client.read_line(), "PONG\r\n");
 
-    client.disconnect();
+    client.close();
     EXPECT_FALSE(client.is_connected());
 }
 
 TEST_F(ServerTest, PublishSubscribe) {
-    relaymq::Client subscriber;
-    ASSERT_TRUE(subscriber.connect("127.0.0.1", port_));
+    relaymq::test::TestSocket subscriber;
+    ASSERT_TRUE(subscriber.connect(port_));
+    ASSERT_TRUE(subscriber.send("SUB service.data.update 100\r\n"));
+    EXPECT_EQ(subscriber.read_line(), "OK\r\n");
 
-    std::promise<relaymq::Message> message_promise;
-    std::future<relaymq::Message> message_future = message_promise.get_future();
+    relaymq::test::TestSocket publisher;
+    ASSERT_TRUE(publisher.connect(port_));
+    ASSERT_TRUE(publisher.send("PUB service.data.update 8\r\nvalue=50\r\n"));
 
-    std::string sid = subscriber.subscribe("service.data.update", [&](const relaymq::Message& msg) {
-        message_promise.set_value(msg);
-    });
-    ASSERT_FALSE(sid.empty());
+    EXPECT_EQ(subscriber.read_line(), "MSG service.data.update 100 8\r\n");
+    EXPECT_EQ(subscriber.read_line(), "value=50\r\n");
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-
-    relaymq::Client publisher;
-    ASSERT_TRUE(publisher.connect("127.0.0.1", port_));
-    ASSERT_TRUE(publisher.publish("service.data.update", "value=50"));
-
-    ASSERT_EQ(message_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
-    relaymq::Message received = message_future.get();
-
-    EXPECT_EQ(received.subject, "service.data.update");
-    EXPECT_EQ(received.sid, sid);
-    EXPECT_EQ(received.payload, "value=50");
-
-    subscriber.disconnect();
-    publisher.disconnect();
+    subscriber.close();
+    publisher.close();
 }
 
 TEST_F(ServerTest, WildcardRouting) {
-    relaymq::Client star_sub;
-    ASSERT_TRUE(star_sub.connect("127.0.0.1", port_));
+    relaymq::test::TestSocket star_sub;
+    ASSERT_TRUE(star_sub.connect(port_));
+    ASSERT_TRUE(star_sub.send("SUB service.*.event star_1\r\n"));
+    EXPECT_EQ(star_sub.read_line(), "OK\r\n");
 
-    relaymq::Client tail_sub;
-    ASSERT_TRUE(tail_sub.connect("127.0.0.1", port_));
+    relaymq::test::TestSocket tail_sub;
+    ASSERT_TRUE(tail_sub.connect(port_));
+    ASSERT_TRUE(tail_sub.send("SUB service.internal.> tail_1\r\n"));
+    EXPECT_EQ(tail_sub.read_line(), "OK\r\n");
 
-    std::atomic<int> star_count(0);
-    std::atomic<int> tail_count(0);
+    relaymq::test::TestSocket publisher;
+    ASSERT_TRUE(publisher.connect(port_));
 
-    star_sub.subscribe("service.*.event", [&](const relaymq::Message&) {
-        star_count++;
-    });
+    ASSERT_TRUE(publisher.send("PUB service.internal.event 9\r\npayload_1\r\n"));
 
-    tail_sub.subscribe("service.internal.>", [&](const relaymq::Message&) {
-        tail_count++;
-    });
+    EXPECT_EQ(star_sub.read_line(), "MSG service.internal.event star_1 9\r\n");
+    EXPECT_EQ(star_sub.read_line(), "payload_1\r\n");
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_EQ(tail_sub.read_line(), "MSG service.internal.event tail_1 9\r\n");
+    EXPECT_EQ(tail_sub.read_line(), "payload_1\r\n");
 
-    relaymq::Client publisher;
-    ASSERT_TRUE(publisher.connect("127.0.0.1", port_));
+    ASSERT_TRUE(publisher.send("PUB service.external.event 9\r\npayload_2\r\n"));
 
-    publisher.publish("service.internal.event", "payload_1");
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_EQ(star_sub.read_line(), "MSG service.external.event star_1 9\r\n");
+    EXPECT_EQ(star_sub.read_line(), "payload_2\r\n");
+    EXPECT_TRUE(tail_sub.read_line(50).empty());
 
-    EXPECT_EQ(star_count.load(), 1);
-    EXPECT_EQ(tail_count.load(), 1);
+    ASSERT_TRUE(publisher.send("PUB service.internal.database.error 9\r\npayload_3\r\n"));
 
-    publisher.publish("service.external.event", "payload_2");
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_EQ(tail_sub.read_line(), "MSG service.internal.database.error tail_1 9\r\n");
+    EXPECT_EQ(tail_sub.read_line(), "payload_3\r\n");
+    EXPECT_TRUE(star_sub.read_line(50).empty());
 
-    EXPECT_EQ(star_count.load(), 2);
-    EXPECT_EQ(tail_count.load(), 1);
-
-    publisher.publish("service.internal.database.error", "payload_3");
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-    EXPECT_EQ(star_count.load(), 2);
-    EXPECT_EQ(tail_count.load(), 2);
-
-    star_sub.disconnect();
-    tail_sub.disconnect();
-    publisher.disconnect();
+    star_sub.close();
+    tail_sub.close();
+    publisher.close();
 }

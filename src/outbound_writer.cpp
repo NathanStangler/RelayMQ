@@ -25,11 +25,11 @@ void OutboundWriter::stop() {
     }
 }
 
-bool OutboundWriter::enqueue(std::shared_ptr<Connection> conn, std::string data) {
+bool OutboundWriter::enqueue(std::shared_ptr<Connection> conn, std::string data, bool close_after) {
     if (!is_running_.load(std::memory_order_relaxed)) {
         return false;
     }
-    OutboundMessage msg{std::move(conn), std::move(data)};
+    OutboundMessage msg{std::move(conn), std::move(data), close_after};
     while (is_running_.load(std::memory_order_relaxed) && !queue_.push(std::move(msg))) {
         std::this_thread::yield();
     }
@@ -59,6 +59,11 @@ void OutboundWriter::writer_loop() {
                     current_fd = fd;
                 }
                 batch.append(msg.data);
+                if (msg.close_after) {
+                    flush_batch(current_fd, batch);
+                    current_fd = -1;
+                    msg.conn->close_connection();
+                }
             }
 
             while (queue_.pop(msg)) {
@@ -69,6 +74,11 @@ void OutboundWriter::writer_loop() {
                         current_fd = fd;
                     }
                     batch.append(msg.data);
+                    if (msg.close_after) {
+                        flush_batch(current_fd, batch);
+                        current_fd = -1;
+                        msg.conn->close_connection();
+                    }
                 }
             }
 
@@ -88,6 +98,11 @@ void OutboundWriter::writer_loop() {
                 current_fd = fd;
             }
             batch.append(msg.data);
+            if (msg.close_after) {
+                flush_batch(current_fd, batch);
+                current_fd = -1;
+                msg.conn->close_connection();
+            }
         }
     }
 

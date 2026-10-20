@@ -32,7 +32,6 @@ add_library(relaymq_core
     src/outbound_writer.cpp
     src/broker.cpp
     src/server.cpp
-    src/client.cpp
     src/peer.cpp
     src/cluster.cpp
     src/acl.cpp
@@ -49,20 +48,6 @@ add_executable(relay-server
     src/server_main.cpp
 )
 target_link_libraries(relay-server PRIVATE
-    relaymq_core
-)
-
-add_executable(relay-cli
-    src/cli_main.cpp
-)
-target_link_libraries(relay-cli PRIVATE
-    relaymq_core
-)
-
-add_executable(relay-bench
-    benchmarks/bench_main.cpp
-)
-target_link_libraries(relay-bench PRIVATE
     relaymq_core
 )
 
@@ -85,10 +70,12 @@ add_executable(relaymq_tests
     tests/test_server.cpp
     tests/test_spsc_queue.cpp
     tests/test_outbound_writer.cpp
-    tests/test_client.cpp
     tests/test_cluster.cpp
     tests/test_auth.cpp
     tests/test_acl.cpp
+)
+target_include_directories(relaymq_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
 )
 target_link_libraries(relaymq_tests PRIVATE
     relaymq_core
