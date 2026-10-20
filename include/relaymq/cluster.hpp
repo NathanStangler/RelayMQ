@@ -24,9 +24,10 @@ public:
     Cluster(const Cluster&) = delete;
     Cluster& operator=(const Cluster&) = delete;
 
-    void init(const std::string& cluster_name, const std::string& node_id);
+    void init(const std::string& cluster_name, const std::string& node_id, const std::string& cluster_token = "");
     const std::string& cluster_name() const;
     const std::string& node_id() const;
+    const std::string& cluster_token() const;
     void set_peer_connect_handler(PeerConnectHandler handler);
     void set_inbound_route_msg_handler(InboundRouteMsgHandler handler);
     std::shared_ptr<Peer> add_peer(int socket_fd);
@@ -51,6 +52,7 @@ public:
 private:
     std::string cluster_name_;
     std::string node_id_;
+    std::string cluster_token_;
     std::mutex mutex_;
     PeerConnectHandler peer_connect_handler_;
     InboundRouteMsgHandler inbound_route_msg_handler_;

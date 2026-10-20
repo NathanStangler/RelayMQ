@@ -19,6 +19,7 @@ struct BenchConfig {
     size_t throughput_count = 50000;
     size_t latency_count = 5000;
     size_t payload_size = 64;
+    std::string auth_token;
     bool run_throughput = true;
     bool run_latency = true;
     bool run_cluster = false;
@@ -73,7 +74,7 @@ static void print_latency_table(const std::string& title, const LatencyStats& st
     std::cout << std::left << std::setw(12) << "Max" << std::right << std::setw(16) << stats.max_us << std::setw(16) << (stats.max_us / 1000.0) << "\n";
 }
 
-static void run_throughput_benchmark(const std::string& host, uint16_t port, size_t count, size_t payload_size) {
+static void run_throughput_benchmark(const std::string& host, uint16_t port, size_t count, size_t payload_size, const std::string& auth_token = "") {
     std::cout << "Throughput Benchmark\n\n";
     std::cout << "Messages: " << count << "\n";
     std::cout << "Payload size: " << payload_size << " bytes\n";
@@ -82,7 +83,7 @@ static void run_throughput_benchmark(const std::string& host, uint16_t port, siz
     const std::string subject = "service.bench.throughput";
 
     relaymq::Client sub_client;
-    if (!sub_client.connect(host, port)) {
+    if (!sub_client.connect(host, port, auth_token)) {
         std::cerr << "Throughput benchmark: failed to connect subscriber.\n";
         return;
     }
@@ -101,7 +102,7 @@ static void run_throughput_benchmark(const std::string& host, uint16_t port, siz
     });
 
     relaymq::Client pub_client;
-    if (!pub_client.connect(host, port)) {
+    if (!pub_client.connect(host, port, auth_token)) {
         std::cerr << "Throughput benchmark: failed to connect publisher.\n";
         return;
     }
@@ -148,9 +149,9 @@ static void run_throughput_benchmark(const std::string& host, uint16_t port, siz
     sub_client.disconnect();
 }
 
-static void run_ping_latency_benchmark(const std::string& host, uint16_t port, size_t count) {
+static void run_ping_latency_benchmark(const std::string& host, uint16_t port, size_t count, const std::string& auth_token = "") {
     relaymq::Client client;
-    if (!client.connect(host, port)) {
+    if (!client.connect(host, port, auth_token)) {
         std::cerr << "Ping latency benchmark: failed to connect.\n";
         return;
     }
@@ -179,13 +180,13 @@ static void run_ping_latency_benchmark(const std::string& host, uint16_t port, s
     client.disconnect();
 }
 
-static void run_pubsub_latency_benchmark(const std::string& host, uint16_t port, size_t count, size_t payload_size) {
+static void run_pubsub_latency_benchmark(const std::string& host, uint16_t port, size_t count, size_t payload_size, const std::string& auth_token = "") {
     const std::string req_subject = "service.bench.latency.req";
     const std::string res_subject = "service.bench.latency.res";
     std::string payload(payload_size, 'A');
 
     relaymq::Client echo_client;
-    if (!echo_client.connect(host, port)) {
+    if (!echo_client.connect(host, port, auth_token)) {
         std::cerr << "Pub/Sub latency benchmark: failed to connect echo client.\n";
         return;
     }
@@ -195,7 +196,7 @@ static void run_pubsub_latency_benchmark(const std::string& host, uint16_t port,
     });
 
     relaymq::Client req_client;
-    if (!req_client.connect(host, port)) {
+    if (!req_client.connect(host, port, auth_token)) {
         std::cerr << "Pub/Sub latency benchmark: failed to connect requester client.\n";
         return;
     }
@@ -444,6 +445,7 @@ static void print_usage() {
               << "  --throughput-count <N>   Number of messages for throughput test (default: 50000)\n"
               << "  --latency-count <N>      Number of iterations for latency test (default: 5000)\n"
               << "  --payload <bytes>        Message payload size in bytes (default: 64)\n"
+              << "  --token <token>          Authentication bearer token\n"
               << "  --throughput-only        Run only the throughput benchmark\n"
               << "  --latency-only           Run only the latency benchmarks\n"
               << "  --help                   Display this help message\n";
@@ -495,6 +497,9 @@ static bool parse_bench_args(int argc, char* argv[], BenchConfig& config) {
                 std::cerr << "Invalid --payload: " << argv[i] << "\n";
                 return false;
             }
+        } else if (arg == "--token" && i + 1 < argc) {
+            i++;
+            config.auth_token = argv[i];
         } else if (arg == "--throughput-only") {
             config.run_throughput = true;
             config.run_latency = false;
@@ -530,6 +535,7 @@ int main(int argc, char* argv[]) {
         server = std::make_unique<relaymq::Server>();
         relaymq::ServerConfig server_config;
         server_config.port = 0;
+        server_config.auth_token = config.auth_token;
         if (!server->start(server_config)) {
             std::cerr << "Failed to start broker.\n";
             return 1;
@@ -541,13 +547,13 @@ int main(int argc, char* argv[]) {
     }
 
     if (config.run_throughput) {
-        run_throughput_benchmark(config.host, config.port, config.throughput_count, config.payload_size);
+        run_throughput_benchmark(config.host, config.port, config.throughput_count, config.payload_size, config.auth_token);
     }
 
     if (config.run_latency) {
         std::cout << "Latency Benchmarks\n\n";
-        run_ping_latency_benchmark(config.host, config.port, config.latency_count);
-        run_pubsub_latency_benchmark(config.host, config.port, config.latency_count, config.payload_size);
+        run_ping_latency_benchmark(config.host, config.port, config.latency_count, config.auth_token);
+        run_pubsub_latency_benchmark(config.host, config.port, config.latency_count, config.payload_size, config.auth_token);
     }
 
     if (server) {

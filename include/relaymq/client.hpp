@@ -20,6 +20,13 @@ struct Message {
     std::string payload;
 };
 
+struct ClientOptions {
+    std::string host = "127.0.0.1";
+    uint16_t port = 9000;
+    std::string auth_token = "";
+    int timeout_ms = 2000;
+};
+
 using MessageCallback = std::function<void(const Message&)>;
 using DisconnectCallback = std::function<void()>;
 
@@ -28,9 +35,11 @@ public:
     Client();
     ~Client();
 
-    bool connect(const std::string& host = "127.0.0.1", uint16_t port = 9000);
+    bool connect(const std::string& host = "127.0.0.1", uint16_t port = 9000, const std::string& auth_token = "");
+    bool connect(const ClientOptions& options);
     void disconnect();
     bool is_connected() const;
+    const std::string& last_error() const;
     void set_disconnect_callback(DisconnectCallback callback);
     bool publish(const std::string& subject, const std::string& payload, const std::string& reply_to = "");
     std::string subscribe(const std::string& subject, MessageCallback callback);
@@ -52,6 +61,11 @@ private:
     std::mutex pong_mutex_;
     std::condition_variable pong_cv_;
     std::atomic<bool> awaiting_pong_;
+    std::mutex auth_mutex_;
+    std::condition_variable auth_cv_;
+    std::atomic<bool> awaiting_auth_{false};
+    std::atomic<bool> auth_success_{false};
+    std::string last_error_;
 
     bool send_raw(const std::string& data);
     void receive_loop();

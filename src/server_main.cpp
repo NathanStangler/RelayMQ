@@ -19,6 +19,8 @@ static void print_usage() {
               << "  --peers <h:p,h:p,...>    Comma-separated list of peer addresses\n"
               << "  --heartbeat <ms>         Heartbeat interval in ms (default: 1000)\n"
               << "  --max-missed <count>     Max missed heartbeats before peer drop (default: 3)\n"
+              << "  --auth-token <token>     Require bearer token authentication for clients\n"
+              << "  --cluster-token <token>  Require shared secret for cluster peering\n"
               << "  --help                   Show this help message\n";
 }
 
@@ -47,6 +49,8 @@ static bool parse_args(int argc, char* argv[], relaymq::ServerConfig& config) {
     std::vector<std::string> peers;
     int heartbeat_ms = 1000;
     int max_missed = 3;
+    std::string auth_token;
+    std::string cluster_token;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -104,6 +108,12 @@ static bool parse_args(int argc, char* argv[], relaymq::ServerConfig& config) {
                 std::cerr << "Invalid max-missed argument: " << argv[i] << "\n";
                 return false;
             }
+        } else if (arg == "--auth-token" && i + 1 < argc) {
+            i++;
+            auth_token = argv[i];
+        } else if (arg == "--cluster-token" && i + 1 < argc) {
+            i++;
+            cluster_token = argv[i];
         } else {
             try {
                 int p = std::stoi(arg);
@@ -131,6 +141,8 @@ static bool parse_args(int argc, char* argv[], relaymq::ServerConfig& config) {
     config.peers = peers;
     config.heartbeat_interval_ms = heartbeat_ms;
     config.max_missed_heartbeats = max_missed;
+    config.auth_token = auth_token;
+    config.cluster_token = cluster_token;
 
     return true;
 }
@@ -154,6 +166,9 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "[RelayMQ Server] Client port: " << server.port() << "\n";
+    if (!config.auth_token.empty()) {
+        std::cout << "[RelayMQ Server] Client authentication: enabled\n";
+    }
     if (server.cluster_port() > 0) {
         std::cout << "[RelayMQ Server] Cluster: " << server.cluster_name()
                   << " | Node ID: " << server.node_id()

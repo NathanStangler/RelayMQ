@@ -46,6 +46,7 @@ std::string to_string(CommandType type) {
         case CommandType::RMSG: return "RMSG";
         case CommandType::RPING: return "RPING";
         case CommandType::RPONG: return "RPONG";
+        case CommandType::AUTH: return "AUTH";
         case CommandType::UNKNOWN: return "UNKNOWN";
         default: return "UNKNOWN";
     }
@@ -253,16 +254,37 @@ bool ProtocolParser::parse_route_connect(const std::vector<std::string_view>& to
         buffer_.erase(0, line_end + 2);
         cmd = Command{};
         cmd.type = CommandType::ERR;
-        cmd.error_message = "Invalid ROUTE_CONNECT syntax: expected ROUTE_CONNECT <cluster_name> <node_id>";
+        cmd.error_message = "Invalid ROUTE_CONNECT syntax: expected ROUTE_CONNECT <cluster_name> <node_id> [cluster_token]";
         return true;
     }
     std::string cname(tokens[1]);
     std::string nid(tokens[2]);
+    std::string token;
+    if (tokens.size() >= 4) {
+        token = std::string(tokens[3]);
+    }
     buffer_.erase(0, line_end + 2);
     cmd = Command{};
     cmd.type = CommandType::ROUTE_CONNECT;
     cmd.cluster_name = std::move(cname);
     cmd.node_id = std::move(nid);
+    cmd.auth_token = std::move(token);
+    return true;
+}
+
+bool ProtocolParser::parse_auth(const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd) {
+    if (tokens.size() < 2) {
+        buffer_.erase(0, line_end + 2);
+        cmd = Command{};
+        cmd.type = CommandType::ERR;
+        cmd.error_message = "Invalid AUTH syntax: expected AUTH <token>";
+        return true;
+    }
+    std::string token(tokens[1]);
+    buffer_.erase(0, line_end + 2);
+    cmd = Command{};
+    cmd.type = CommandType::AUTH;
+    cmd.auth_token = std::move(token);
     return true;
 }
 
@@ -334,6 +356,9 @@ bool ProtocolParser::next_command(Command& cmd) {
         }
         if (equals_ignore_case(action, "OK")) {
             return parse_simple_command(CommandType::OK, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "AUTH")) {
+            return parse_auth(tokens, line_end, cmd);
         }
         if (equals_ignore_case(action, "ERR")) {
             return parse_err(line, action, line_end, cmd);
@@ -437,13 +462,30 @@ std::string ProtocolParser::format_err(std::string_view reason) {
     return out;
 }
 
-std::string ProtocolParser::format_route_connect(std::string_view cluster_name, std::string_view node_id) {
+std::string ProtocolParser::format_route_connect(std::string_view cluster_name, std::string_view node_id, std::string_view auth_token) {
     std::string out;
-    out.reserve(cluster_name.size() + node_id.size() + 17);
+    size_t total_len = cluster_name.size() + node_id.size() + 17;
+    if (!auth_token.empty()) {
+        total_len += auth_token.size() + 1;
+    }
+    out.reserve(total_len);
     out.append("ROUTE_CONNECT ");
     out.append(cluster_name);
     out.append(" ");
     out.append(node_id);
+    if (!auth_token.empty()) {
+        out.append(" ");
+        out.append(auth_token);
+    }
+    out.append("\r\n");
+    return out;
+}
+
+std::string ProtocolParser::format_auth(std::string_view token) {
+    std::string out;
+    out.reserve(token.size() + 7);
+    out.append("AUTH ");
+    out.append(token);
     out.append("\r\n");
     return out;
 }

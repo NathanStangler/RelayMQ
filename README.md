@@ -33,20 +33,20 @@ ctest --test-dir build --output-on-failure
 
 ```bash
 # Standalone broker
-./build/relay-server --port 9000
+./build/relay-server --port 9000 --auth-token secret123
 
 # Clustered brokers
-./build/relay-server --port 9001 --cluster-port 9101 --node-id node_1
-./build/relay-server --port 9002 --cluster-port 9102 --node-id node_2 --peers 127.0.0.1:9101
+./build/relay-server --port 9001 --cluster-port 9101 --node-id node_1 --cluster-token cluster_secret
+./build/relay-server --port 9002 --cluster-port 9102 --node-id node_2 --peers 127.0.0.1:9101 --cluster-token cluster_secret
 
 # Subscribe
-./build/relay-cli sub "service.*" 127.0.0.1 9000
+./build/relay-cli sub "service.*" 127.0.0.1 9000 --token secret123
 
 # Publish
-./build/relay-cli pub "service.message" "value=50" 127.0.0.1 9000
+./build/relay-cli pub "service.message" "value=50" 127.0.0.1 9000 --token secret123
 
 # Request-Reply RPC
-./build/relay-cli req "service.echo" "ping" 127.0.0.1 9000
+./build/relay-cli req "service.echo" "ping" 127.0.0.1 9000 --token secret123
 ```
 
 ---

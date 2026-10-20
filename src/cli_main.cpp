@@ -56,20 +56,36 @@ static void parse_endpoint(int argc, char* argv[], int start_idx, std::string& h
     }
 }
 
+static std::string extract_token(int& argc, char* argv[]) {
+    std::string token;
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--token" && i + 1 < argc) {
+            token = argv[i + 1];
+            for (int j = i; j + 2 < argc; j++) {
+                argv[j] = argv[j + 2];
+            }
+            argc -= 2;
+            i--;
+        }
+    }
+    return token;
+}
+
 static void print_usage() {
     std::cout << "RelayMQ CLI\n\n"
               << "Usage:\n"
-              << "  relay-cli pub <subject> <payload> [host] [port]   Publish a message\n"
-              << "  relay-cli sub <subject> [host] [port]             Subscribe and listen for messages\n"
-              << "  relay-cli req <subject> <payload> [host] [port]   Request-reply\n"
-              << "  relay-cli ping [host] [port]                      Ping the broker and measure latency\n\n"
+              << "  relay-cli pub <subject> <payload> [host] [port] [--token <tok>]   Publish a message\n"
+              << "  relay-cli sub <subject> [host] [port] [--token <tok>]             Subscribe and listen for messages\n"
+              << "  relay-cli req <subject> <payload> [host] [port] [--token <tok>]   Request-reply\n"
+              << "  relay-cli ping [host] [port] [--token <tok>]                      Ping the broker and measure latency\n\n"
               << "Defaults: host = 127.0.0.1, port = 9000\n";
 }
 
-static int handle_pub(int argc, char* argv[]) {
+static int handle_pub(int argc, char* argv[], const std::string& token) {
     if (argc < 4) {
         std::cerr << "Error: pub requires <subject> and <payload>\n";
-        std::cerr << "Usage: relay-cli pub <subject> <payload> [host] [port]\n";
+        std::cerr << "Usage: relay-cli pub <subject> <payload> [host] [port] [--token <tok>]\n";
         return 1;
     }
 
@@ -80,8 +96,12 @@ static int handle_pub(int argc, char* argv[]) {
     parse_endpoint(argc, argv, 4, host, port);
 
     relaymq::Client client;
-    if (!client.connect(host, port)) {
-        std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port << "\n";
+    if (!client.connect(host, port, token)) {
+        std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port;
+        if (!client.last_error().empty()) {
+            std::cerr << " (" << client.last_error() << ")";
+        }
+        std::cerr << "\n";
         return 1;
     }
 
@@ -94,10 +114,10 @@ static int handle_pub(int argc, char* argv[]) {
     return 0;
 }
 
-static int handle_sub(int argc, char* argv[]) {
+static int handle_sub(int argc, char* argv[], const std::string& token) {
     if (argc < 3) {
         std::cerr << "Error: sub requires <subject>\n";
-        std::cerr << "Usage: relay-cli sub <subject> [host] [port]\n";
+        std::cerr << "Usage: relay-cli sub <subject> [host] [port] [--token <tok>]\n";
         return 1;
     }
 
@@ -113,8 +133,12 @@ static int handle_sub(int argc, char* argv[]) {
     pthread_sigmask(SIG_BLOCK, &sigset, nullptr);
 
     relaymq::Client client;
-    if (!client.connect(host, port)) {
-        std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port << "\n";
+    if (!client.connect(host, port, token)) {
+        std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port;
+        if (!client.last_error().empty()) {
+            std::cerr << " (" << client.last_error() << ")";
+        }
+        std::cerr << "\n";
         return 1;
     }
 
@@ -168,10 +192,10 @@ static int handle_sub(int argc, char* argv[]) {
     return 0;
 }
 
-static int handle_req(int argc, char* argv[]) {
+static int handle_req(int argc, char* argv[], const std::string& token) {
     if (argc < 4) {
         std::cerr << "Error: req requires <subject> and <payload>\n";
-        std::cerr << "Usage: relay-cli req <subject> <payload> [host] [port]\n";
+        std::cerr << "Usage: relay-cli req <subject> <payload> [host] [port] [--token <tok>]\n";
         return 1;
     }
 
@@ -182,8 +206,12 @@ static int handle_req(int argc, char* argv[]) {
     parse_endpoint(argc, argv, 4, host, port);
 
     relaymq::Client client;
-    if (!client.connect(host, port)) {
-        std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port << "\n";
+    if (!client.connect(host, port, token)) {
+        std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port;
+        if (!client.last_error().empty()) {
+            std::cerr << " (" << client.last_error() << ")";
+        }
+        std::cerr << "\n";
         return 1;
     }
 
@@ -199,14 +227,18 @@ static int handle_req(int argc, char* argv[]) {
     return 1;
 }
 
-static int handle_ping(int argc, char* argv[]) {
+static int handle_ping(int argc, char* argv[], const std::string& token) {
     std::string host;
     uint16_t port = 9000;
     parse_endpoint(argc, argv, 2, host, port);
 
     relaymq::Client client;
-    if (!client.connect(host, port)) {
-        std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port << "\n";
+    if (!client.connect(host, port, token)) {
+        std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port;
+        if (!client.last_error().empty()) {
+            std::cerr << " (" << client.last_error() << ")";
+        }
+        std::cerr << "\n";
         return 1;
     }
 
@@ -226,19 +258,25 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    std::string token = extract_token(argc, argv);
+    if (argc < 2) {
+        print_usage();
+        return 1;
+    }
+
     std::string mode = argv[1];
 
     if (mode == "pub") {
-        return handle_pub(argc, argv);
+        return handle_pub(argc, argv, token);
     }
     if (mode == "sub") {
-        return handle_sub(argc, argv);
+        return handle_sub(argc, argv, token);
     }
     if (mode == "req") {
-        return handle_req(argc, argv);
+        return handle_req(argc, argv, token);
     }
     if (mode == "ping") {
-        return handle_ping(argc, argv);
+        return handle_ping(argc, argv, token);
     }
 
     std::cerr << "Unknown command: " << mode << "\n\n";

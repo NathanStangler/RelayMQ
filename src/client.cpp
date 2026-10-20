@@ -14,7 +14,15 @@ Client::~Client() {
     disconnect();
 }
 
-bool Client::connect(const std::string& host, uint16_t port) {
+bool Client::connect(const std::string& host, uint16_t port, const std::string& auth_token) {
+    ClientOptions options;
+    options.host = host;
+    options.port = port;
+    options.auth_token = auth_token;
+    return connect(options);
+}
+
+bool Client::connect(const ClientOptions& options) {
     if (is_connected_) {
         return true;
     }
@@ -23,14 +31,44 @@ bool Client::connect(const std::string& host, uint16_t port) {
         receive_thread_.join();
     }
     parser_.clear();
+    last_error_.clear();
 
-    socket_fd_ = net::connect_tcp(host, port, false);
+    socket_fd_ = net::connect_tcp(options.host, options.port, false);
     if (socket_fd_ < 0) {
+        last_error_ = "Failed to establish TCP connection";
         return false;
     }
 
     is_connected_ = true;
     receive_thread_ = std::thread(&Client::receive_loop, this);
+
+    if (!options.auth_token.empty()) {
+        std::unique_lock<std::mutex> lock(auth_mutex_);
+        awaiting_auth_ = true;
+        auth_success_ = false;
+
+        std::string auth_msg = ProtocolParser::format_auth(options.auth_token);
+        if (!send_raw(auth_msg)) {
+            awaiting_auth_ = false;
+            disconnect();
+            last_error_ = "Failed to send AUTH frame";
+            return false;
+        }
+
+        bool received = auth_cv_.wait_for(lock, std::chrono::milliseconds(options.timeout_ms), [this]() {
+            return !awaiting_auth_.load() || !is_connected_.load();
+        });
+
+        if (!received || !is_connected_ || !auth_success_.load()) {
+            awaiting_auth_ = false;
+            disconnect();
+            if (last_error_.empty()) {
+                last_error_ = "Authentication timed out or rejected";
+            }
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -48,10 +86,15 @@ void Client::disconnect() {
     }
 
     pong_cv_.notify_all();
+    auth_cv_.notify_all();
 }
 
 bool Client::is_connected() const {
     return is_connected_;
+}
+
+const std::string& Client::last_error() const {
+    return last_error_;
 }
 
 void Client::set_disconnect_callback(DisconnectCallback callback) {
@@ -212,11 +255,31 @@ void Client::receive_loop() {
                 lock.unlock();
 
                 pong_cv_.notify_all();
+            } else if (cmd.type == CommandType::OK) {
+                if (awaiting_auth_.load()) {
+                    std::unique_lock<std::mutex> lock(auth_mutex_);
+                    auth_success_ = true;
+                    awaiting_auth_ = false;
+                    lock.unlock();
+
+                    auth_cv_.notify_all();
+                }
+            } else if (cmd.type == CommandType::ERR) {
+                if (awaiting_auth_.load()) {
+                    std::unique_lock<std::mutex> lock(auth_mutex_);
+                    auth_success_ = false;
+                    last_error_ = cmd.error_message;
+                    awaiting_auth_ = false;
+                    lock.unlock();
+
+                    auth_cv_.notify_all();
+                }
             }
         }
     }
 
     pong_cv_.notify_all();
+    auth_cv_.notify_all();
 }
 
 }

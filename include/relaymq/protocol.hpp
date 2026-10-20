@@ -21,7 +21,8 @@ enum class CommandType {
     RUNSUB,
     RMSG,
     RPING,
-    RPONG
+    RPONG,
+    AUTH
 };
 
 std::string to_string(CommandType type);
@@ -35,6 +36,7 @@ struct Command {
     std::string error_message;
     std::string cluster_name;
     std::string node_id;
+    std::string auth_token;
 };
 
 class ProtocolParser {
@@ -55,12 +57,13 @@ public:
     static std::string format_pong();
     static std::string format_ok();
     static std::string format_err(std::string_view reason);
-    static std::string format_route_connect(std::string_view cluster_name, std::string_view node_id);
+    static std::string format_route_connect(std::string_view cluster_name, std::string_view node_id, std::string_view auth_token = "");
     static std::string format_rsub(std::string_view subject);
     static std::string format_runsub(std::string_view subject);
     static std::string format_rmsg(std::string_view subject, std::string_view payload, std::string_view reply_to = "");
     static std::string format_rping();
     static std::string format_rpong();
+    static std::string format_auth(std::string_view token);
 
 private:
     std::string buffer_;
@@ -74,6 +77,7 @@ private:
     bool parse_msg(const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd);
     bool parse_route_connect(const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd);
     bool parse_err(std::string_view line, std::string_view action, size_t line_end, Command& cmd);
+    bool parse_auth(const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd);
 };
 
 }

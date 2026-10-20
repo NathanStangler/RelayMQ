@@ -184,3 +184,36 @@ TEST(ProtocolParserTest, RouteStreamFragmentation) {
     EXPECT_EQ(cmd.payload, "12345678");
     EXPECT_EQ(parser.buffered_bytes(), 0);
 }
+
+TEST(ProtocolParserTest, AuthCommands) {
+    relaymq::ProtocolParser parser;
+    relaymq::Command cmd;
+
+    std::string msg = relaymq::ProtocolParser::format_auth("secret_token_123");
+    EXPECT_EQ(msg, "AUTH secret_token_123\r\n");
+
+    parser.append(msg);
+    ASSERT_TRUE(parser.next_command(cmd));
+    EXPECT_EQ(cmd.type, relaymq::CommandType::AUTH);
+    EXPECT_EQ(cmd.auth_token, "secret_token_123");
+
+    parser.append("AUTH\r\n");
+    ASSERT_TRUE(parser.next_command(cmd));
+    EXPECT_EQ(cmd.type, relaymq::CommandType::ERR);
+    EXPECT_EQ(cmd.error_message, "Invalid AUTH syntax: expected AUTH <token>");
+}
+
+TEST(ProtocolParserTest, RouteConnectWithToken) {
+    relaymq::ProtocolParser parser;
+    relaymq::Command cmd;
+
+    std::string msg = relaymq::ProtocolParser::format_route_connect("cluster_1", "node_1", "cluster_secret");
+    EXPECT_EQ(msg, "ROUTE_CONNECT cluster_1 node_1 cluster_secret\r\n");
+
+    parser.append(msg);
+    ASSERT_TRUE(parser.next_command(cmd));
+    EXPECT_EQ(cmd.type, relaymq::CommandType::ROUTE_CONNECT);
+    EXPECT_EQ(cmd.cluster_name, "cluster_1");
+    EXPECT_EQ(cmd.node_id, "node_1");
+    EXPECT_EQ(cmd.auth_token, "cluster_secret");
+}

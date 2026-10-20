@@ -22,6 +22,9 @@ public:
     void set_outbound_handler(OutboundHandler handler);
     void set_cluster_broadcast_handler(ClusterBroadcastHandler handler);
     void set_route_msg_handler(RouteMsgHandler handler);
+    void set_auth_token(const std::string& token);
+    const std::string& auth_token() const;
+    bool is_auth_required() const;
     void add_connection(std::shared_ptr<Connection> conn);
     void remove_connection(const std::string& client_id);
     void handle_command(std::shared_ptr<Connection> conn, const Command& cmd);
@@ -40,6 +43,7 @@ private:
     OutboundHandler outbound_handler_;
     ClusterBroadcastHandler cluster_broadcast_handler_;
     RouteMsgHandler route_msg_handler_;
+    std::string auth_token_;
 };
 
 }

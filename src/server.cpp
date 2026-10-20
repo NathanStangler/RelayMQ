@@ -29,7 +29,8 @@ bool Server::start(const ServerConfig& config) {
     std::string assigned_node_id = config.node_id.empty()
         ? "node_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())
         : config.node_id;
-    cluster_.init(config.cluster_name, assigned_node_id);
+    cluster_.init(config.cluster_name, assigned_node_id, config.cluster_token);
+    broker_.set_auth_token(config.auth_token);
 
     server_fd_ = net::create_tcp_listener(config.port, 128, &port_);
     if (server_fd_ < 0) {
@@ -214,7 +215,7 @@ bool Server::connect_to_peer(const std::string& host, uint16_t port) {
     ev.data.fd = peer_fd;
     epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, peer_fd, &ev);
 
-    peer->send(ProtocolParser::format_route_connect(cluster_.cluster_name(), cluster_.node_id()));
+    peer->send(ProtocolParser::format_route_connect(cluster_.cluster_name(), cluster_.node_id(), cluster_.cluster_token()));
     return true;
 }
 
@@ -246,7 +247,7 @@ void Server::accept_cluster_connection() {
         ev.data.fd = peer_fd;
         epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, peer_fd, &ev);
 
-        peer->send(ProtocolParser::format_route_connect(cluster_.cluster_name(), cluster_.node_id()));
+        peer->send(ProtocolParser::format_route_connect(cluster_.cluster_name(), cluster_.node_id(), cluster_.cluster_token()));
     }
 }
 
@@ -254,7 +255,8 @@ void Server::event_loop() {
     epoll_event events[64];
 
     while (is_running_.load(std::memory_order_relaxed)) {
-        int num_ready = epoll_wait(epoll_fd_, events, 64, -1);
+        int timeout_ms = (!config_.auth_token.empty() && config_.auth_timeout_ms > 0) ? 500 : -1;
+        int num_ready = epoll_wait(epoll_fd_, events, 64, timeout_ms);
         if (num_ready < 0) {
             if (errno == EINTR) {
                 continue;
@@ -278,6 +280,22 @@ void Server::event_loop() {
                 handle_peer(fd, ev_flags);
             } else {
                 handle_client(fd, ev_flags);
+            }
+        }
+
+        if (!config_.auth_token.empty() && config_.auth_timeout_ms > 0) {
+            std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+            std::vector<int> expired_clients;
+            for (auto it = clients_.begin(); it != clients_.end(); it++) {
+                if (!it->second->is_authenticated()) {
+                    int64_t elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second->connected_at()).count();
+                    if (elapsed_ms > config_.auth_timeout_ms) {
+                        expired_clients.push_back(it->first);
+                    }
+                }
+            }
+            for (size_t i = 0; i < expired_clients.size(); i++) {
+                remove_client(expired_clients[i]);
             }
         }
     }
@@ -304,7 +322,8 @@ void Server::accept_connection() {
         uint64_t cid = next_client_id_++;
         std::string client_id = "client_" + std::to_string(cid);
 
-        std::shared_ptr<Connection> conn = std::make_shared<Connection>(client_fd, client_id);
+        bool authenticated = config_.auth_token.empty();
+        std::shared_ptr<Connection> conn = std::make_shared<Connection>(client_fd, client_id, authenticated);
         broker_.add_connection(conn);
         clients_[client_fd] = conn;
 
@@ -334,6 +353,10 @@ void Server::handle_client(int client_fd, uint32_t events) {
         Command cmd;
         while (conn->parser().next_command(cmd)) {
             broker_.handle_command(conn, cmd);
+            if (!conn->is_open()) {
+                remove_client(client_fd);
+                return;
+            }
         }
     } else if (bytes_read == 0) {
         remove_client(client_fd);

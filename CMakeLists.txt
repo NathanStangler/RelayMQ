@@ -82,6 +82,7 @@ add_executable(relaymq_tests
     tests/test_spsc_queue.cpp
     tests/test_client.cpp
     tests/test_cluster.cpp
+    tests/test_auth.cpp
 )
 target_link_libraries(relaymq_tests PRIVATE
     relaymq_core

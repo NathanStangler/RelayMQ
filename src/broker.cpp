@@ -20,6 +20,20 @@ void Broker::set_route_msg_handler(RouteMsgHandler handler) {
     lock.unlock();
 }
 
+void Broker::set_auth_token(const std::string& token) {
+    std::unique_lock<std::mutex> lock(broker_mutex_);
+    auth_token_ = token;
+    lock.unlock();
+}
+
+const std::string& Broker::auth_token() const {
+    return auth_token_;
+}
+
+bool Broker::is_auth_required() const {
+    return !auth_token_.empty();
+}
+
 void Broker::add_connection(std::shared_ptr<Connection> conn) {
     if (!conn) {
         return;
@@ -81,6 +95,35 @@ void Broker::deliver_local(const std::string& subject, const std::string& payloa
 
 void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd) {
     if (!conn || !outbound_handler_) {
+        return;
+    }
+
+    bool auth_required = false;
+    std::string expected_token;
+    {
+        std::unique_lock<std::mutex> lock(broker_mutex_);
+        auth_required = !auth_token_.empty();
+        expected_token = auth_token_;
+    }
+
+    if (auth_required && !conn->is_authenticated()) {
+        if (cmd.type == CommandType::AUTH) {
+            if (cmd.auth_token == expected_token) {
+                conn->set_authenticated(true);
+                outbound_handler_(conn, ProtocolParser::format_ok());
+            } else {
+                outbound_handler_(conn, ProtocolParser::format_err("Invalid Credentials"));
+                conn->close_connection();
+            }
+        } else {
+            outbound_handler_(conn, ProtocolParser::format_err("Authorization Violation"));
+            conn->close_connection();
+        }
+        return;
+    }
+
+    if (cmd.type == CommandType::AUTH) {
+        outbound_handler_(conn, ProtocolParser::format_ok());
         return;
     }
 

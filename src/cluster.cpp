@@ -6,10 +6,11 @@ Cluster::~Cluster() {
     close_all();
 }
 
-void Cluster::init(const std::string& cluster_name, const std::string& node_id) {
+void Cluster::init(const std::string& cluster_name, const std::string& node_id, const std::string& cluster_token) {
     std::unique_lock<std::mutex> lock(mutex_);
     cluster_name_ = cluster_name;
     node_id_ = node_id;
+    cluster_token_ = cluster_token;
     lock.unlock();
 }
 
@@ -19,6 +20,10 @@ const std::string& Cluster::cluster_name() const {
 
 const std::string& Cluster::node_id() const {
     return node_id_;
+}
+
+const std::string& Cluster::cluster_token() const {
+    return cluster_token_;
 }
 
 std::shared_ptr<Peer> Cluster::add_peer(int socket_fd) {
@@ -96,6 +101,10 @@ void Cluster::handle_command(std::shared_ptr<Peer> peer, const Command& cmd) {
     switch (cmd.type) {
         case CommandType::ROUTE_CONNECT: {
             if (cmd.cluster_name != cluster_name_) {
+                remove_peer(peer->socket_fd());
+                return;
+            }
+            if (!cluster_token_.empty() && cmd.auth_token != cluster_token_) {
                 remove_peer(peer->socket_fd());
                 return;
             }

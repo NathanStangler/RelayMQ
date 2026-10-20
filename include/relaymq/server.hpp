@@ -27,6 +27,9 @@ struct ServerConfig {
     std::vector<std::string> peers;
     int heartbeat_interval_ms = 1000;
     int max_missed_heartbeats = 3;
+    std::string auth_token = "";
+    std::string cluster_token = "";
+    int auth_timeout_ms = 2000;
 };
 
 class Server {
