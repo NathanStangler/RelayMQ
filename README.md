@@ -32,3 +32,4 @@ ctest --test-dir build --output-on-failure
 
 - **Command Line Interface**: [relaymq-cli](https://github.com/NathanStangler/relaymq-cli)
 - **C++ Client SDK**: [relaymq-cpp](https://github.com/NathanStangler/relaymq-cpp)
+- **Go Client SDK**: [relaymq-go](https://github.com/NathanStangler/relaymq-go)
