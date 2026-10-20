@@ -6,6 +6,10 @@
 #include <algorithm>
 #include <future>
 #include <atomic>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 
 class ClusterTest : public testing::Test {
 protected:
@@ -568,4 +572,215 @@ TEST_F(ClusterTest, CrossClusterRequestReply) {
 
     worker.disconnect();
     requester.disconnect();
+}
+
+TEST_F(ClusterTest, HeartbeatTimeoutDisconnect) {
+    relaymq::ServerConfig config3;
+    config3.port = 0;
+    config3.enable_clustering = true;
+    config3.cluster_port = 0;
+    config3.cluster_name = "cluster_1";
+    config3.node_id = "node_3";
+    config3.heartbeat_interval_ms = 30;
+    config3.max_missed_heartbeats = 2;
+
+    relaymq::Server server_3;
+    ASSERT_TRUE(server_3.start(config3));
+
+    int raw_fd = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(raw_fd, 0);
+
+    sockaddr_in saddr{};
+    saddr.sin_family = AF_INET;
+    saddr.sin_port = htons(server_3.cluster_port());
+    inet_pton(AF_INET, "127.0.0.1", &saddr.sin_addr);
+
+    ASSERT_EQ(::connect(raw_fd, reinterpret_cast<sockaddr*>(&saddr), sizeof(saddr)), 0);
+
+    std::string route_conn = "ROUTE_CONNECT cluster_1 node_4\r\n";
+    send(raw_fd, route_conn.data(), route_conn.size(), 0);
+
+    bool connected = false;
+    for (int i = 0; i < 50; i++) {
+        if (server_3.connected_peers() == 1) {
+            connected = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(connected);
+
+    bool timed_out = false;
+    for (int i = 0; i < 50; i++) {
+        if (server_3.connected_peers() == 0) {
+            timed_out = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    }
+    EXPECT_TRUE(timed_out);
+
+    close(raw_fd);
+    server_3.stop();
+}
+
+TEST_F(ClusterTest, NodeRestartRecovery) {
+    ASSERT_TRUE(server_1_.connect_to_peer("127.0.0.1", server_2_.cluster_port()));
+
+    bool connected = false;
+    for (int i = 0; i < 50; i++) {
+        if (server_1_.connected_peers() == 1 && server_2_.connected_peers() == 1) {
+            connected = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(connected);
+
+    relaymq::Client client_1;
+    ASSERT_TRUE(client_1.connect("127.0.0.1", server_1_.port()));
+    client_1.subscribe("service.feed.orders", [](const relaymq::Message&) {});
+    ASSERT_GE(client_1.ping(), 0);
+
+    relaymq::Client client_2;
+    ASSERT_TRUE(client_2.connect("127.0.0.1", server_2_.port()));
+    client_2.subscribe("service.feed.executions", [](const relaymq::Message&) {});
+    ASSERT_GE(client_2.ping(), 0);
+
+    bool synced = false;
+    for (int i = 0; i < 50; i++) {
+        if (server_1_.total_remote_subscriptions() == 1 && server_2_.total_remote_subscriptions() == 1) {
+            synced = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(synced);
+
+    client_2.disconnect();
+    server_2_.stop();
+
+    bool purged = false;
+    for (int i = 0; i < 50; i++) {
+        if (server_1_.connected_peers() == 0 && server_1_.total_remote_subscriptions() == 0) {
+            purged = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_TRUE(purged);
+
+    EXPECT_EQ(server_1_.local_subject_count("service.feed.orders"), 1);
+    EXPECT_TRUE(client_1.publish("service.feed.orders", "local_test_payload"));
+    ASSERT_GE(client_1.ping(), 0);
+
+    relaymq::ServerConfig config3;
+    config3.port = 0;
+    config3.enable_clustering = true;
+    config3.cluster_port = 0;
+    config3.cluster_name = "cluster_1";
+    config3.node_id = "node_2";
+
+    relaymq::Server server_2_restarted;
+    ASSERT_TRUE(server_2_restarted.start(config3));
+
+    ASSERT_TRUE(server_1_.connect_to_peer("127.0.0.1", server_2_restarted.cluster_port()));
+
+    bool reconnected = false;
+    for (int i = 0; i < 50; i++) {
+        if (server_1_.connected_peers() == 1 && server_2_restarted.connected_peers() == 1) {
+            reconnected = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(reconnected);
+
+    bool resynced = false;
+    for (int i = 0; i < 50; i++) {
+        if (server_2_restarted.total_remote_subscriptions() == 1) {
+            resynced = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_TRUE(resynced);
+    EXPECT_EQ(server_2_restarted.match_peers("service.feed.orders").size(), 1);
+
+    relaymq::Client client_2_new;
+    ASSERT_TRUE(client_2_new.connect("127.0.0.1", server_2_restarted.port()));
+
+    std::promise<relaymq::Message> promise;
+    std::future<relaymq::Message> future = promise.get_future();
+
+    std::string sid_new = client_1.subscribe("service.data.restored", [&](const relaymq::Message& msg) {
+        promise.set_value(msg);
+    });
+    ASSERT_GE(client_1.ping(), 0);
+
+    for (int i = 0; i < 50; i++) {
+        if (server_2_restarted.total_remote_subscriptions() == 2) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    client_2_new.publish("service.data.restored", "resumed_payload");
+
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    EXPECT_EQ(future.get().payload, "resumed_payload");
+
+    client_1.disconnect();
+    client_2_new.disconnect();
+    server_2_restarted.stop();
+}
+
+TEST_F(ClusterTest, LocalClientsUnaffectedByPeerPartition) {
+    ASSERT_TRUE(server_1_.connect_to_peer("127.0.0.1", server_2_.cluster_port()));
+
+    bool connected = false;
+    for (int i = 0; i < 50; i++) {
+        if (server_1_.connected_peers() == 1 && server_2_.connected_peers() == 1) {
+            connected = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(connected);
+
+    relaymq::Client sub;
+    ASSERT_TRUE(sub.connect("127.0.0.1", server_1_.port()));
+    std::atomic<int> received_count(0);
+    sub.subscribe("service.local.only", [&](const relaymq::Message&) {
+        received_count++;
+    });
+    ASSERT_GE(sub.ping(), 0);
+
+    relaymq::Client pub;
+    ASSERT_TRUE(pub.connect("127.0.0.1", server_1_.port()));
+
+    pub.publish("service.local.only", "msg1");
+    ASSERT_GE(pub.ping(), 0);
+    EXPECT_EQ(received_count.load(), 1);
+
+    server_2_.stop();
+
+    bool drop_detected = false;
+    for (int i = 0; i < 50; i++) {
+        if (server_1_.connected_peers() == 0) {
+            drop_detected = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_TRUE(drop_detected);
+
+    pub.publish("service.local.only", "msg2");
+    pub.publish("service.local.only", "msg3");
+    ASSERT_GE(pub.ping(), 0);
+
+    EXPECT_EQ(received_count.load(), 3);
+
+    sub.disconnect();
+    pub.disconnect();
 }

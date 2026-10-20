@@ -25,6 +25,8 @@ struct ServerConfig {
     std::string cluster_name = "default";
     std::string node_id = "";
     std::vector<std::string> peers;
+    int heartbeat_interval_ms = 1000;
+    int max_missed_heartbeats = 3;
 };
 
 class Server {
@@ -62,14 +64,17 @@ private:
     std::atomic<bool> is_running_;
     Broker broker_;
     Cluster cluster_;
+    ServerConfig config_;
     std::thread event_thread_;
     std::thread writer_thread_;
+    std::thread heartbeat_thread_;
     SpscQueue<OutboundMessage, 65536> outbound_queue_;
     std::unordered_map<int, std::shared_ptr<Connection>> clients_;
     std::atomic<uint64_t> next_client_id_;
 
     void event_loop();
     void writer_loop();
+    void heartbeat_loop();
     void flush_batch(int fd, std::string& batch);
     void accept_connection();
     void handle_client(int client_fd, uint32_t events);

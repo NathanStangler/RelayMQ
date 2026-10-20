@@ -90,4 +90,43 @@ void Peer::close_connection() {
     }
 }
 
+void Peer::record_activity() {
+    unanswered_pings_.store(0, std::memory_order_release);
+    std::unique_lock<std::mutex> lock(peer_mutex_);
+    last_activity_ = std::chrono::steady_clock::now();
+    lock.unlock();
+}
+
+int Peer::increment_unanswered_pings() {
+    return ++unanswered_pings_;
+}
+
+void Peer::reset_unanswered_pings() {
+    unanswered_pings_.store(0, std::memory_order_release);
+}
+
+int Peer::unanswered_pings() const {
+    return unanswered_pings_.load(std::memory_order_acquire);
+}
+
+void Peer::set_endpoint(const std::string& host, uint16_t port) {
+    std::unique_lock<std::mutex> lock(peer_mutex_);
+    endpoint_ = host + ":" + std::to_string(port);
+    lock.unlock();
+}
+
+std::string Peer::endpoint() {
+    std::unique_lock<std::mutex> lock(peer_mutex_);
+    std::string endpoint = endpoint_;
+    lock.unlock();
+    return endpoint;
+}
+
+std::chrono::steady_clock::time_point Peer::last_activity() {
+    std::unique_lock<std::mutex> lock(peer_mutex_);
+    std::chrono::steady_clock::time_point last_activity = last_activity_;
+    lock.unlock();
+    return last_activity;
+}
+
 }

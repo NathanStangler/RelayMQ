@@ -118,6 +118,7 @@ void Cluster::handle_command(std::shared_ptr<Peer> peer, const Command& cmd) {
             break;
         }
         case CommandType::RPONG: {
+            peer->record_activity();
             break;
         }
         case CommandType::RSUB: {
@@ -165,6 +166,17 @@ std::vector<std::string> Cluster::peer_ids() {
     }
     lock.unlock();
     return ids;
+}
+
+std::vector<std::shared_ptr<Peer>> Cluster::all_peers() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    std::vector<std::shared_ptr<Peer>> list;
+    list.reserve(peers_.size());
+    for (auto it = peers_.begin(); it != peers_.end(); it++) {
+        list.push_back(it->second);
+    }
+    lock.unlock();
+    return list;
 }
 
 bool Cluster::send_to_peer(const std::string& node_id, std::string_view data) {

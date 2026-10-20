@@ -162,8 +162,13 @@ bool Server::start(const ServerConfig& config) {
         broker_.deliver_local(subject, payload, reply_to);
     });
 
+    config_ = config;
     writer_thread_ = std::thread(&Server::writer_loop, this);
     event_thread_ = std::thread(&Server::event_loop, this);
+
+    if (config_.enable_clustering && config_.heartbeat_interval_ms > 0) {
+        heartbeat_thread_ = std::thread(&Server::heartbeat_loop, this);
+    }
 
     for (size_t i = 0; i < config.peers.size(); i++) {
         const std::string& peer_str = config.peers[i];
@@ -196,6 +201,10 @@ void Server::stop() {
 
     if (writer_thread_.joinable()) {
         writer_thread_.join();
+    }
+
+    if (heartbeat_thread_.joinable()) {
+        heartbeat_thread_.join();
     }
 
     if (epoll_fd_ >= 0) {
@@ -284,6 +293,7 @@ bool Server::connect_to_peer(const std::string& host, uint16_t port) {
     fcntl(peer_fd, F_SETFL, flags | O_NONBLOCK);
 
     std::shared_ptr<Peer> peer = cluster_.add_peer(peer_fd);
+    peer->set_endpoint(host, port);
 
     epoll_event ev{};
     ev.events = EPOLLIN | EPOLLRDHUP;
@@ -314,6 +324,9 @@ void Server::accept_cluster_connection() {
         setsockopt(peer_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
         std::shared_ptr<Peer> peer = cluster_.add_peer(peer_fd);
+        char peer_ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &peer_addr.sin_addr, peer_ip, sizeof(peer_ip));
+        peer->set_endpoint(peer_ip, ntohs(peer_addr.sin_port));
 
         epoll_event ev{};
         ev.events = EPOLLIN | EPOLLRDHUP;
@@ -445,6 +458,7 @@ void Server::handle_peer(int peer_fd, uint32_t events) {
     char buffer[16384];
     ssize_t bytes_read = recv(peer_fd, buffer, sizeof(buffer), MSG_DONTWAIT);
     if (bytes_read > 0) {
+        peer->record_activity();
         peer->parser().append(buffer, static_cast<size_t>(bytes_read));
         Command cmd;
         while (peer->parser().next_command(cmd)) {
@@ -579,6 +593,64 @@ void Server::writer_loop() {
     }
 
     flush_batch(current_fd, batch);
+}
+
+void Server::heartbeat_loop() {
+    int interval_ms = config_.heartbeat_interval_ms;
+    int max_missed = config_.max_missed_heartbeats;
+
+    while (is_running_.load(std::memory_order_relaxed)) {
+        std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(interval_ms);
+        while (is_running_.load(std::memory_order_relaxed) && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        if (!is_running_.load(std::memory_order_relaxed)) {
+            break;
+        }
+
+        std::vector<int> dead_fds;
+        std::vector<std::shared_ptr<Peer>> peers = cluster_.all_peers();
+        for (size_t i = 0; i < peers.size(); i++) {
+            std::shared_ptr<Peer>& peer = peers[i];
+            if (!peer->is_connected() || !peer->is_handshake_complete()) {
+                continue;
+            }
+
+            int missed = peer->increment_unanswered_pings();
+            if (missed > max_missed) {
+                dead_fds.push_back(peer->socket_fd());
+            } else {
+                peer->send(ProtocolParser::format_rping());
+            }
+        }
+
+        for (size_t i = 0; i < dead_fds.size(); i++) {
+            remove_peer(dead_fds[i]);
+        }
+
+        for (size_t i = 0; i < config_.peers.size(); i++) {
+            const std::string& peer_str = config_.peers[i];
+            size_t colon = peer_str.find(':');
+            if (colon != std::string::npos) {
+                std::string host = peer_str.substr(0, colon);
+                uint16_t port = static_cast<uint16_t>(std::stoi(peer_str.substr(colon + 1)));
+
+                bool already_connected = false;
+                std::vector<std::shared_ptr<Peer>> active = cluster_.all_peers();
+                for (size_t j = 0; j < active.size(); j++) {
+                    if (active[j]->is_connected() && active[j]->endpoint() == peer_str) {
+                        already_connected = true;
+                        break;
+                    }
+                }
+
+                if (!already_connected) {
+                    connect_to_peer(host, port);
+                }
+            }
+        }
+    }
 }
 
 }

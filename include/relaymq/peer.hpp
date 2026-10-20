@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <chrono>
 
 namespace relaymq {
 
@@ -27,6 +28,13 @@ public:
     ProtocolParser& parser();
     bool send(std::string_view data);
     void close_connection();
+    void record_activity();
+    int increment_unanswered_pings();
+    void reset_unanswered_pings();
+    int unanswered_pings() const;
+    void set_endpoint(const std::string& host, uint16_t port);
+    std::string endpoint();
+    std::chrono::steady_clock::time_point last_activity();
 
 private:
     std::atomic<int> socket_fd_;
@@ -35,6 +43,9 @@ private:
     std::string cluster_name_;
     std::atomic<bool> is_connected_;
     std::atomic<bool> handshake_complete_;
+    std::atomic<int> unanswered_pings_{0};
+    std::string endpoint_;
+    std::chrono::steady_clock::time_point last_activity_{std::chrono::steady_clock::now()};
     std::mutex send_mutex_;
     ProtocolParser parser_;
 };

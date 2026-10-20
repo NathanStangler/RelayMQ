@@ -36,6 +36,7 @@ public:
     void handle_command(std::shared_ptr<Peer> peer, const Command& cmd);
     size_t connected_peers();
     std::vector<std::string> peer_ids();
+    std::vector<std::shared_ptr<Peer>> all_peers();
     bool send_to_peer(const std::string& node_id, std::string_view data);
     void broadcast(std::string_view data);
     void route_message(const std::string& subject, const std::string& payload, const std::string& reply_to = "");
