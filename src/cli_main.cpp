@@ -96,6 +96,10 @@ static int handle_pub(int argc, char* argv[], const std::string& token) {
     parse_endpoint(argc, argv, 4, host, port);
 
     relaymq::Client client;
+    client.set_error_callback([](const std::string& err) {
+        std::cerr << "[ERROR] " << err << "\n";
+    });
+
     if (!client.connect(host, port, token)) {
         std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port;
         if (!client.last_error().empty()) {
@@ -133,6 +137,10 @@ static int handle_sub(int argc, char* argv[], const std::string& token) {
     pthread_sigmask(SIG_BLOCK, &sigset, nullptr);
 
     relaymq::Client client;
+    client.set_error_callback([](const std::string& err) {
+        std::cerr << "\n[ERROR] " << err << "\n";
+    });
+
     if (!client.connect(host, port, token)) {
         std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port;
         if (!client.last_error().empty()) {
@@ -206,6 +214,10 @@ static int handle_req(int argc, char* argv[], const std::string& token) {
     parse_endpoint(argc, argv, 4, host, port);
 
     relaymq::Client client;
+    client.set_error_callback([](const std::string& err) {
+        std::cerr << "[ERROR] " << err << "\n";
+    });
+
     if (!client.connect(host, port, token)) {
         std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port;
         if (!client.last_error().empty()) {
@@ -233,6 +245,10 @@ static int handle_ping(int argc, char* argv[], const std::string& token) {
     parse_endpoint(argc, argv, 2, host, port);
 
     relaymq::Client client;
+    client.set_error_callback([](const std::string& err) {
+        std::cerr << "[ERROR] " << err << "\n";
+    });
+
     if (!client.connect(host, port, token)) {
         std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port;
         if (!client.last_error().empty()) {

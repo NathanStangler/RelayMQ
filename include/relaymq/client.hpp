@@ -29,6 +29,7 @@ struct ClientOptions {
 
 using MessageCallback = std::function<void(const Message&)>;
 using DisconnectCallback = std::function<void()>;
+using ErrorCallback = std::function<void(const std::string&)>;
 
 class Client {
 public:
@@ -41,6 +42,7 @@ public:
     bool is_connected() const;
     const std::string& last_error() const;
     void set_disconnect_callback(DisconnectCallback callback);
+    void set_error_callback(ErrorCallback callback);
     bool publish(const std::string& subject, const std::string& payload, const std::string& reply_to = "");
     std::string subscribe(const std::string& subject, MessageCallback callback);
     bool unsubscribe(const std::string& sid);
@@ -58,6 +60,8 @@ private:
     std::atomic<uint64_t> next_request_id_;
     std::unordered_map<std::string, MessageCallback> subscriptions_;
     DisconnectCallback disconnect_callback_;
+    ErrorCallback error_callback_;
+    std::string last_error_;
     std::mutex pong_mutex_;
     std::condition_variable pong_cv_;
     std::atomic<bool> awaiting_pong_;
@@ -65,7 +69,6 @@ private:
     std::condition_variable auth_cv_;
     std::atomic<bool> awaiting_auth_{false};
     std::atomic<bool> auth_success_{false};
-    std::string last_error_;
 
     bool send_raw(const std::string& data);
     void receive_loop();

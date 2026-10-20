@@ -16,13 +16,37 @@ TEST(AclTest, UnrestrictedAccess) {
     EXPECT_TRUE(acl.can_subscribe("service.notifications.email"));
 }
 
+TEST(AclTest, PatternAccess) {
+    relaymq::SubjectAcl acl(false);
+    EXPECT_FALSE(acl.is_unrestricted());
+
+    EXPECT_FALSE(acl.allow_publish(""));
+    EXPECT_FALSE(acl.allow_publish("service..metrics"));
+    EXPECT_FALSE(acl.allow_publish("service.>.invalid"));
+    EXPECT_EQ(acl.publish_rule_count(), 0);
+
+    EXPECT_TRUE(acl.allow_publish("service.jobs.start"));
+    EXPECT_TRUE(acl.allow_subscribe("service.events.>"));
+    EXPECT_EQ(acl.publish_rule_count(), 1);
+    EXPECT_EQ(acl.subscribe_rule_count(), 1);
+
+    EXPECT_TRUE(acl.can_publish("service.jobs.start"));
+    EXPECT_TRUE(acl.can_subscribe("service.events.created"));
+
+    acl.clear();
+    EXPECT_EQ(acl.publish_rule_count(), 0);
+    EXPECT_EQ(acl.subscribe_rule_count(), 0);
+    EXPECT_FALSE(acl.can_publish("service.jobs.start"));
+    EXPECT_FALSE(acl.can_subscribe("service.events.created"));
+}
+
 TEST(AclTest, ScopedPublishWildcards) {
     relaymq::SubjectAcl acl(false);
     EXPECT_FALSE(acl.is_unrestricted());
 
-    acl.allow_publish("service.jobs.start");
-    acl.allow_publish("service.*.metrics");
-    acl.allow_publish("service.telemetry.>");
+    EXPECT_TRUE(acl.allow_publish("service.jobs.start"));
+    EXPECT_TRUE(acl.allow_publish("service.*.metrics"));
+    EXPECT_TRUE(acl.allow_publish("service.telemetry.>"));
 
     EXPECT_TRUE(acl.can_publish("service.jobs.start"));
     EXPECT_FALSE(acl.can_publish("service.jobs.cancel"));
@@ -40,8 +64,8 @@ TEST(AclTest, ScopedPublishWildcards) {
 
 TEST(AclTest, ScopedSubscribeWildcards) {
     relaymq::SubjectAcl acl(false);
-    acl.allow_subscribe("service.events.>");
-    acl.allow_subscribe("events.>");
+    EXPECT_TRUE(acl.allow_subscribe("service.events.>"));
+    EXPECT_TRUE(acl.allow_subscribe("events.>"));
 
     EXPECT_TRUE(acl.can_subscribe("service.events.created"));
     EXPECT_TRUE(acl.can_subscribe("service.events.>"));
@@ -70,6 +94,17 @@ TEST(AclTest, ScopedPublishSubscribe) {
     ASSERT_TRUE(server.start(config));
 
     relaymq::Client sub_client;
+    std::mutex err_mutex;
+    std::condition_variable err_cv;
+    std::string received_error;
+
+    sub_client.set_error_callback([&](const std::string& err) {
+        std::unique_lock<std::mutex> lock(err_mutex);
+        received_error = err;
+        lock.unlock();
+        err_cv.notify_one();
+    });
+
     ASSERT_TRUE(sub_client.connect("127.0.0.1", server.port(), "consumer_token"));
 
     std::mutex cv_mutex;
@@ -86,14 +121,18 @@ TEST(AclTest, ScopedPublishSubscribe) {
     });
     EXPECT_FALSE(sid.empty());
 
-    bool pub_denied = sub_client.publish("service.events.created", "payload");
-    EXPECT_TRUE(pub_denied);
+    sub_client.publish("service.events.created", "unauthorized_payload");
+
+    std::unique_lock<std::mutex> err_lock(err_mutex);
+    bool got_err = err_cv.wait_for(err_lock, std::chrono::seconds(2), [&]() {
+        return !received_error.empty();
+    });
+    EXPECT_TRUE(got_err);
+    EXPECT_NE(received_error.find("Permission Violation"), std::string::npos);
+    EXPECT_NE(sub_client.last_error().find("Permission Violation"), std::string::npos);
 
     relaymq::Client pub_client;
     ASSERT_TRUE(pub_client.connect("127.0.0.1", server.port(), "worker_token"));
-
-    std::string bad_sid = pub_client.subscribe("service.admin.secrets", [](const relaymq::Message&) {});
-    (void)bad_sid;
 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     EXPECT_TRUE(pub_client.publish("service.events.created", "job_id=20"));

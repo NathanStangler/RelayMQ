@@ -136,3 +136,32 @@ TEST_F(ClientTest, RequestReplyTimeout) {
 
     requester.disconnect();
 }
+
+TEST_F(ClientTest, ErrorCallbackAndLastError) {
+    relaymq::Client client;
+    std::mutex err_mutex;
+    std::condition_variable err_cv;
+    std::string captured_error;
+
+    client.set_error_callback([&](const std::string& err) {
+        std::unique_lock<std::mutex> lock(err_mutex);
+        captured_error = err;
+        lock.unlock();
+        err_cv.notify_one();
+    });
+
+    ASSERT_TRUE(client.connect("127.0.0.1", port_));
+
+    client.subscribe("service..invalid", [](const relaymq::Message&) {});
+
+    std::unique_lock<std::mutex> lock(err_mutex);
+    bool ok = err_cv.wait_for(lock, std::chrono::seconds(2), [&]() {
+        return !captured_error.empty();
+    });
+
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(captured_error, "Invalid subject");
+    EXPECT_EQ(client.last_error(), "Invalid subject");
+
+    client.disconnect();
+}

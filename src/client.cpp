@@ -102,6 +102,10 @@ void Client::set_disconnect_callback(DisconnectCallback callback) {
     disconnect_callback_ = std::move(callback);
 }
 
+void Client::set_error_callback(ErrorCallback callback) {
+    error_callback_ = std::move(callback);
+}
+
 bool Client::send_raw(const std::string& data) {
     std::lock_guard<std::mutex> lock(send_mutex_);
     if (!is_connected_ || socket_fd_ < 0) {
@@ -265,14 +269,19 @@ void Client::receive_loop() {
                     auth_cv_.notify_all();
                 }
             } else if (cmd.type == CommandType::ERR) {
+                last_error_ = cmd.error_message;
+
                 if (awaiting_auth_.load()) {
                     std::unique_lock<std::mutex> lock(auth_mutex_);
                     auth_success_ = false;
-                    last_error_ = cmd.error_message;
                     awaiting_auth_ = false;
                     lock.unlock();
 
                     auth_cv_.notify_all();
+                }
+
+                if (error_callback_) {
+                    error_callback_(cmd.error_message);
                 }
             }
         }

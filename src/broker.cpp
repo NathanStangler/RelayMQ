@@ -104,6 +104,7 @@ void Broker::deliver_local(const std::string& subject, const std::string& payloa
     std::vector<std::pair<std::shared_ptr<Connection>, std::string>> pending_msgs;
     std::unique_lock<std::mutex> lock(broker_mutex_);
     std::vector<Subscription> matches = registry_.match(subject);
+    pending_msgs.reserve(matches.size());
     for (size_t i = 0; i < matches.size(); i++) {
         const Subscription& sub = matches[i];
         auto it = connections_.find(sub.client_id);
@@ -124,17 +125,55 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
         return;
     }
 
-    bool auth_required = false;
-    std::string expected_token;
-    std::shared_ptr<SubjectAcl> matched_acl;
-    bool token_valid = false;
+    if (!conn->is_authenticated()) {
+        std::unique_lock<std::mutex> auth_lock(broker_mutex_);
+        bool auth_required = !auth_token_.empty() || !token_acls_.empty();
+        std::string expected_token = auth_token_;
+        std::shared_ptr<SubjectAcl> matched_acl;
+        bool token_valid = false;
 
-    std::unique_lock<std::mutex> auth_lock(broker_mutex_);
-    auth_required = !auth_token_.empty() || !token_acls_.empty();
-    expected_token = auth_token_;
+        if (cmd.type == CommandType::AUTH) {
+            if (!expected_token.empty() && cmd.auth_token == expected_token) {
+                token_valid = true;
+                matched_acl = std::make_shared<SubjectAcl>(true);
+            } else {
+                auto it = token_acls_.find(cmd.auth_token);
+                if (it != token_acls_.end()) {
+                    token_valid = true;
+                    matched_acl = it->second;
+                }
+            }
+        }
+        auth_lock.unlock();
+
+        if (auth_required) {
+            if (cmd.type == CommandType::AUTH) {
+                if (token_valid) {
+                    conn->set_authenticated(true);
+                    if (matched_acl) {
+                        conn->set_acl(matched_acl);
+                    }
+                    outbound_handler_(conn, ProtocolParser::format_ok());
+                } else {
+                    outbound_handler_(conn, ProtocolParser::format_err("Invalid Credentials"));
+                    conn->close_connection();
+                }
+            } else {
+                outbound_handler_(conn, ProtocolParser::format_err("Authorization Violation"));
+                conn->close_connection();
+            }
+            return;
+        }
+
+        conn->set_authenticated(true);
+    }
 
     if (cmd.type == CommandType::AUTH) {
-        if (!expected_token.empty() && cmd.auth_token == expected_token) {
+        std::unique_lock<std::mutex> auth_lock(broker_mutex_);
+        bool token_valid = false;
+        std::shared_ptr<SubjectAcl> matched_acl;
+
+        if (!auth_token_.empty() && cmd.auth_token == auth_token_) {
             token_valid = true;
             matched_acl = std::make_shared<SubjectAcl>(true);
         } else {
@@ -144,33 +183,16 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
                 matched_acl = it->second;
             }
         }
-    }
-    auth_lock.unlock();
+        auth_lock.unlock();
 
-    if (auth_required && !conn->is_authenticated()) {
-        if (cmd.type == CommandType::AUTH) {
-            if (token_valid) {
-                conn->set_authenticated(true);
-                if (matched_acl) {
-                    conn->set_acl(matched_acl);
-                }
-                outbound_handler_(conn, ProtocolParser::format_ok());
-            } else {
-                outbound_handler_(conn, ProtocolParser::format_err("Invalid Credentials"));
-                conn->close_connection();
+        if (token_valid) {
+            if (matched_acl) {
+                conn->set_acl(matched_acl);
             }
+            outbound_handler_(conn, ProtocolParser::format_ok());
         } else {
-            outbound_handler_(conn, ProtocolParser::format_err("Authorization Violation"));
-            conn->close_connection();
+            outbound_handler_(conn, ProtocolParser::format_err("Invalid Credentials"));
         }
-        return;
-    }
-
-    if (cmd.type == CommandType::AUTH) {
-        if (token_valid && matched_acl) {
-            conn->set_acl(matched_acl);
-        }
-        outbound_handler_(conn, ProtocolParser::format_ok());
         return;
     }
 
@@ -199,15 +221,18 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
                 break;
             }
 
+            if (!SubscriptionRegistry::is_valid_subject(cmd.subject)) {
+                outbound_handler_(conn, ProtocolParser::format_err("Invalid subject"));
+                break;
+            }
+
             bool should_broadcast = false;
             std::unique_lock<std::mutex> lock(broker_mutex_);
-            if (SubscriptionRegistry::is_valid_subject(cmd.subject)) {
-                registry_.add_subscription(cmd.subject, conn->id(), cmd.sid);
-                local_subject_counts_[cmd.subject]++;
-                size_t count = local_subject_counts_[cmd.subject];
-                if (count == 1) {
-                    should_broadcast = true;
-                }
+            registry_.add_subscription(cmd.subject, conn->id(), cmd.sid);
+            local_subject_counts_[cmd.subject]++;
+            size_t count = local_subject_counts_[cmd.subject];
+            if (count == 1) {
+                should_broadcast = true;
             }
             lock.unlock();
 

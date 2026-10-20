@@ -112,9 +112,9 @@ std::string Peer::endpoint() {
 
 std::chrono::steady_clock::time_point Peer::last_activity() {
     std::unique_lock<std::mutex> lock(peer_mutex_);
-    std::chrono::steady_clock::time_point last_activity = last_activity_;
+    std::chrono::steady_clock::time_point activity = last_activity_;
     lock.unlock();
-    return last_activity;
+    return activity;
 }
 
 }

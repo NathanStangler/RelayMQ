@@ -12,11 +12,14 @@ public:
     SubjectAcl(bool unrestricted = true);
     ~SubjectAcl() = default;
 
-    void allow_publish(const std::string& pattern);
-    void allow_subscribe(const std::string& pattern);
+    bool allow_publish(const std::string& pattern);
+    bool allow_subscribe(const std::string& pattern);
     bool can_publish(std::string_view subject) const;
     bool can_subscribe(std::string_view subject) const;
     bool is_unrestricted() const;
+    void clear();
+    size_t publish_rule_count() const;
+    size_t subscribe_rule_count() const;
     const std::vector<std::string>& publish_patterns() const;
     const std::vector<std::string>& subscribe_patterns() const;
 

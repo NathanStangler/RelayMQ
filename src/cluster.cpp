@@ -1,4 +1,5 @@
 #include "relaymq/cluster.hpp"
+#include <algorithm>
 
 namespace relaymq {
 
