@@ -7,6 +7,11 @@ SubscriptionRegistry::SubscriptionRegistry() : root_(std::make_unique<Node>()), 
 
 SubscriptionRegistry::~SubscriptionRegistry() = default;
 
+void SubscriptionRegistry::clear() {
+    root_ = std::make_unique<Node>();
+    count_ = 0;
+}
+
 std::vector<std::string_view> SubscriptionRegistry::tokenize(std::string_view subject) {
     std::vector<std::string_view> tokens;
     if (subject.empty()) {
@@ -99,17 +104,20 @@ void SubscriptionRegistry::add_subscription(const std::string& subject, const st
     count_++;
 }
 
-bool SubscriptionRegistry::remove_subscription(const std::string& client_id, const std::string& sid) {
-    return remove_recursive(root_.get(), client_id, sid);
+bool SubscriptionRegistry::remove_subscription(const std::string& client_id, const std::string& sid, std::string* subject) {
+    return remove_recursive(root_.get(), client_id, sid, subject);
 }
 
-bool SubscriptionRegistry::remove_recursive(Node* current, const std::string& client_id, const std::string& sid) {
+bool SubscriptionRegistry::remove_recursive(Node* current, const std::string& client_id, const std::string& sid, std::string* subject) {
     if (!current) {
         return false;
     }
 
     for (auto it = current->exact_subscribers.begin(); it != current->exact_subscribers.end(); it++) {
         if (it->client_id == client_id && it->sid == sid) {
+            if (subject) {
+                *subject = it->subject;
+            }
             current->exact_subscribers.erase(it);
             count_--;
             return true;
@@ -118,18 +126,21 @@ bool SubscriptionRegistry::remove_recursive(Node* current, const std::string& cl
 
     for (auto it = current->multi_wildcard_subscribers.begin(); it != current->multi_wildcard_subscribers.end(); it++) {
         if (it->client_id == client_id && it->sid == sid) {
+            if (subject) {
+                *subject = it->subject;
+            }
             current->multi_wildcard_subscribers.erase(it);
             count_--;
             return true;
         }
     }
 
-    if (remove_recursive(current->single_wildcard_child.get(), client_id, sid)) {
+    if (remove_recursive(current->single_wildcard_child.get(), client_id, sid, subject)) {
         return true;
     }
 
     for (auto& pair : current->literal_children) {
-        if (remove_recursive(pair.second.get(), client_id, sid)) {
+        if (remove_recursive(pair.second.get(), client_id, sid, subject)) {
             return true;
         }
     }
@@ -137,11 +148,13 @@ bool SubscriptionRegistry::remove_recursive(Node* current, const std::string& cl
     return false;
 }
 
-void SubscriptionRegistry::remove_all_for_client(const std::string& client_id) {
-    remove_client_recursive(root_.get(), client_id);
+std::vector<std::string> SubscriptionRegistry::remove_all_for_client(const std::string& client_id) {
+    std::vector<std::string> removed_subjects;
+    remove_client_recursive(root_.get(), client_id, removed_subjects);
+    return removed_subjects;
 }
 
-void SubscriptionRegistry::remove_client_recursive(Node* current, const std::string& client_id) {
+void SubscriptionRegistry::remove_client_recursive(Node* current, const std::string& client_id, std::vector<std::string>& removed_subjects) {
     if (!current) {
         return;
     }
@@ -149,6 +162,7 @@ void SubscriptionRegistry::remove_client_recursive(Node* current, const std::str
     auto exact_it = current->exact_subscribers.begin();
     while (exact_it != current->exact_subscribers.end()) {
         if (exact_it->client_id == client_id) {
+            removed_subjects.push_back(exact_it->subject);
             exact_it = current->exact_subscribers.erase(exact_it);
             count_--;
         } else {
@@ -159,6 +173,7 @@ void SubscriptionRegistry::remove_client_recursive(Node* current, const std::str
     auto tail_it = current->multi_wildcard_subscribers.begin();
     while (tail_it != current->multi_wildcard_subscribers.end()) {
         if (tail_it->client_id == client_id) {
+            removed_subjects.push_back(tail_it->subject);
             tail_it = current->multi_wildcard_subscribers.erase(tail_it);
             count_--;
         } else {
@@ -166,10 +181,10 @@ void SubscriptionRegistry::remove_client_recursive(Node* current, const std::str
         }
     }
 
-    remove_client_recursive(current->single_wildcard_child.get(), client_id);
+    remove_client_recursive(current->single_wildcard_child.get(), client_id, removed_subjects);
 
     for (auto& pair : current->literal_children) {
-        remove_client_recursive(pair.second.get(), client_id);
+        remove_client_recursive(pair.second.get(), client_id, removed_subjects);
     }
 }
 

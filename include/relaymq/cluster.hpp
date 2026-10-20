@@ -1,17 +1,22 @@
 #pragma once
 
 #include "relaymq/peer.hpp"
+#include "relaymq/subscription_registry.hpp"
 #include <string>
 #include <string_view>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <mutex>
+#include <functional>
 
 namespace relaymq {
 
 class Cluster {
 public:
+    using PeerConnectHandler = std::function<void(std::shared_ptr<Peer>)>;
+
     Cluster() = default;
     ~Cluster();
 
@@ -21,6 +26,7 @@ public:
     void init(const std::string& cluster_name, const std::string& node_id);
     const std::string& cluster_name() const;
     const std::string& node_id() const;
+    void set_peer_connect_handler(PeerConnectHandler handler);
     std::shared_ptr<Peer> add_peer(int socket_fd);
     std::shared_ptr<Peer> find_peer(int socket_fd);
     std::shared_ptr<Peer> find_peer(const std::string& node_id);
@@ -30,14 +36,23 @@ public:
     std::vector<std::string> peer_ids();
     bool send_to_peer(const std::string& node_id, std::string_view data);
     void broadcast(std::string_view data);
+    void add_remote_subscription(const std::string& node_id, const std::string& subject);
+    bool remove_remote_subscription(const std::string& node_id, const std::string& subject);
+    void remove_all_remote_subscriptions(const std::string& node_id);
+    std::vector<std::string> match_peers(std::string_view subject);
+    size_t total_remote_subscriptions();
+    std::vector<std::string> peer_subscriptions(const std::string& node_id);
     void close_all();
 
 private:
     std::string cluster_name_;
     std::string node_id_;
     std::mutex mutex_;
+    PeerConnectHandler peer_connect_handler_;
     std::unordered_map<int, std::shared_ptr<Peer>> peers_;
     std::unordered_map<std::string, std::shared_ptr<Peer>> node_peers_;
+    std::unordered_map<std::string, std::unordered_set<std::string>> peer_subscriptions_;
+    SubscriptionRegistry remote_registry_;
 };
 
 }

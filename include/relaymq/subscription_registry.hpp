@@ -24,8 +24,9 @@ public:
     ~SubscriptionRegistry();
 
     void add_subscription(const std::string& subject, const std::string& client_id, const std::string& sid);
-    bool remove_subscription(const std::string& client_id, const std::string& sid);
-    void remove_all_for_client(const std::string& client_id);
+    bool remove_subscription(const std::string& client_id, const std::string& sid, std::string* subject = nullptr);
+    std::vector<std::string> remove_all_for_client(const std::string& client_id);
+    void clear();
     std::vector<Subscription> match(std::string_view publish_subject) const;
     size_t total_subscriptions() const;
 
@@ -44,8 +45,8 @@ private:
     size_t count_ = 0;
 
     void match_recursive(const Node* current, const std::vector<std::string_view>& tokens, size_t token_index, std::vector<Subscription>& results) const;
-    bool remove_recursive(Node* current, const std::string& client_id, const std::string& sid);
-    void remove_client_recursive(Node* current, const std::string& client_id);
+    bool remove_recursive(Node* current, const std::string& client_id, const std::string& sid, std::string* subject);
+    void remove_client_recursive(Node* current, const std::string& client_id, std::vector<std::string>& removed_subjects);
 };
 
 }

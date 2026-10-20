@@ -140,6 +140,20 @@ bool Server::start(const ServerConfig& config) {
         }
     });
 
+    broker_.set_cluster_broadcast_handler([this](std::string_view data) {
+        cluster_.broadcast(data);
+    });
+
+    cluster_.set_peer_connect_handler([this](std::shared_ptr<Peer> peer) {
+        if (!peer) {
+            return;
+        }
+        std::vector<std::string> subjects = broker_.active_subjects();
+        for (size_t i = 0; i < subjects.size(); i++) {
+            peer->send(ProtocolParser::format_rsub(subjects[i]));
+        }
+    });
+
     writer_thread_ = std::thread(&Server::writer_loop, this);
     event_thread_ = std::thread(&Server::event_loop, this);
 
@@ -456,6 +470,26 @@ bool Server::send_to_peer(const std::string& node_id, std::string_view data) {
 
 void Server::broadcast_to_peers(std::string_view data) {
     cluster_.broadcast(data);
+}
+
+std::vector<std::string> Server::match_peers(std::string_view subject) {
+    return cluster_.match_peers(subject);
+}
+
+size_t Server::total_remote_subscriptions() {
+    return cluster_.total_remote_subscriptions();
+}
+
+std::vector<std::string> Server::peer_subscriptions(const std::string& node_id) {
+    return cluster_.peer_subscriptions(node_id);
+}
+
+std::vector<std::string> Server::active_subjects() {
+    return broker_.active_subjects();
+}
+
+size_t Server::local_subject_count(const std::string& subject) {
+    return broker_.local_subject_count(subject);
 }
 
 void Server::flush_batch(int fd, std::string& batch) {

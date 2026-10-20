@@ -53,6 +53,12 @@ std::shared_ptr<Peer> Cluster::find_peer(const std::string& node_id) {
     return nullptr;
 }
 
+void Cluster::set_peer_connect_handler(PeerConnectHandler handler) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    peer_connect_handler_ = std::move(handler);
+    lock.unlock();
+}
+
 std::shared_ptr<Peer> Cluster::remove_peer(int socket_fd) {
     std::shared_ptr<Peer> peer;
     std::unique_lock<std::mutex> lock(mutex_);
@@ -64,6 +70,8 @@ std::shared_ptr<Peer> Cluster::remove_peer(int socket_fd) {
         std::string remote_id = peer->node_id();
         if (!remote_id.empty()) {
             node_peers_.erase(remote_id);
+            peer_subscriptions_.erase(remote_id);
+            remote_registry_.remove_all_for_client(remote_id);
         }
     }
     lock.unlock();
@@ -88,9 +96,15 @@ void Cluster::handle_command(std::shared_ptr<Peer> peer, const Command& cmd) {
             peer->set_node_id(cmd.node_id);
             peer->set_handshake_complete(true);
 
+            PeerConnectHandler connect_handler;
             std::unique_lock<std::mutex> lock(mutex_);
             node_peers_[cmd.node_id] = peer;
+            connect_handler = peer_connect_handler_;
             lock.unlock();
+
+            if (connect_handler) {
+                connect_handler(peer);
+            }
             break;
         }
         case CommandType::RPING: {
@@ -100,8 +114,14 @@ void Cluster::handle_command(std::shared_ptr<Peer> peer, const Command& cmd) {
         case CommandType::RPONG: {
             break;
         }
-        case CommandType::RSUB:
-        case CommandType::RUNSUB:
+        case CommandType::RSUB: {
+            add_remote_subscription(peer->node_id(), cmd.subject);
+            break;
+        }
+        case CommandType::RUNSUB: {
+            remove_remote_subscription(peer->node_id(), cmd.subject);
+            break;
+        }
         case CommandType::RMSG:
             break;
         default:
@@ -160,6 +180,82 @@ void Cluster::broadcast(std::string_view data) {
     }
 }
 
+void Cluster::add_remote_subscription(const std::string& node_id, const std::string& subject) {
+    if (node_id.empty() || !SubscriptionRegistry::is_valid_subject(subject)) {
+        return;
+    }
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (peer_subscriptions_[node_id].insert(subject).second) {
+        remote_registry_.add_subscription(subject, node_id, subject);
+    }
+    lock.unlock();
+}
+
+bool Cluster::remove_remote_subscription(const std::string& node_id, const std::string& subject) {
+    if (node_id.empty()) {
+        return false;
+    }
+    std::unique_lock<std::mutex> lock(mutex_);
+    auto it = peer_subscriptions_.find(node_id);
+    if (it != peer_subscriptions_.end() && it->second.erase(subject) > 0) {
+        if (it->second.empty()) {
+            peer_subscriptions_.erase(it);
+        }
+        remote_registry_.remove_subscription(node_id, subject);
+        lock.unlock();
+        return true;
+    }
+    lock.unlock();
+    return false;
+}
+
+void Cluster::remove_all_remote_subscriptions(const std::string& node_id) {
+    if (node_id.empty()) {
+        return;
+    }
+    std::unique_lock<std::mutex> lock(mutex_);
+    peer_subscriptions_.erase(node_id);
+    remote_registry_.remove_all_for_client(node_id);
+    lock.unlock();
+}
+
+std::vector<std::string> Cluster::match_peers(std::string_view subject) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    std::vector<Subscription> matches = remote_registry_.match(subject);
+    lock.unlock();
+
+    std::vector<std::string> unique_peers;
+    unique_peers.reserve(matches.size());
+    for (size_t i = 0; i < matches.size(); i++) {
+        const std::string& peer_id = matches[i].client_id;
+        if (std::find(unique_peers.begin(), unique_peers.end(), peer_id) == unique_peers.end()) {
+            unique_peers.push_back(peer_id);
+        }
+    }
+    return unique_peers;
+}
+
+size_t Cluster::total_remote_subscriptions() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    size_t count = remote_registry_.total_subscriptions();
+    lock.unlock();
+    return count;
+}
+
+std::vector<std::string> Cluster::peer_subscriptions(const std::string& node_id) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    std::vector<std::string> subscriptions;
+    auto it = peer_subscriptions_.find(node_id);
+    if (it != peer_subscriptions_.end()) {
+        subscriptions.reserve(it->second.size());
+        for (auto sit = it->second.begin(); sit != it->second.end(); sit++) {
+            subscriptions.push_back(*sit);
+        }
+    }
+    lock.unlock();
+    return subscriptions;
+}
+
 void Cluster::close_all() {
     std::vector<std::shared_ptr<Peer>> peers_to_close;
     std::unique_lock<std::mutex> lock(mutex_);
@@ -168,6 +264,8 @@ void Cluster::close_all() {
     }
     peers_.clear();
     node_peers_.clear();
+    peer_subscriptions_.clear();
+    remote_registry_.clear();
     lock.unlock();
 
     for (size_t i = 0; i < peers_to_close.size(); i++) {

@@ -136,3 +136,39 @@ TEST(SubscriptionRegistryTest, RemoveAllForClient) {
     ASSERT_EQ(matches.size(), 1);
     EXPECT_EQ(matches[0].client_id, "client_2");
 }
+
+TEST(SubscriptionRegistryTest, RemoveSubscriptionWithSubject) {
+    relaymq::SubscriptionRegistry registry;
+
+    registry.add_subscription("service.order.created", "client_1", "sub_1");
+    registry.add_subscription("service.order.*", "client_1", "sub_2");
+    registry.add_subscription("service.order.>", "client_1", "sub_3");
+
+    std::string subject;
+    EXPECT_TRUE(registry.remove_subscription("client_1", "sub_1", &subject));
+    EXPECT_EQ(subject, "service.order.created");
+
+    EXPECT_TRUE(registry.remove_subscription("client_1", "sub_3", &subject));
+    EXPECT_EQ(subject, "service.order.>");
+
+    EXPECT_TRUE(registry.remove_subscription("client_1", "sub_2", &subject));
+    EXPECT_EQ(subject, "service.order.*");
+
+    EXPECT_FALSE(registry.remove_subscription("client_1", "sub_1", &subject));
+    EXPECT_EQ(registry.total_subscriptions(), 0);
+}
+
+TEST(SubscriptionRegistryTest, RemoveAllReturnsSubjects) {
+    relaymq::SubscriptionRegistry registry;
+
+    registry.add_subscription("service.a", "client_1", "1");
+    registry.add_subscription("service.b.*", "client_1", "2");
+    registry.add_subscription("service.c.>", "client_1", "3");
+
+    std::vector<std::string> removed = registry.remove_all_for_client("client_1");
+    EXPECT_EQ(removed.size(), 3);
+    EXPECT_EQ(registry.total_subscriptions(), 0);
+
+    registry.clear();
+    EXPECT_EQ(registry.total_subscriptions(), 0);
+}

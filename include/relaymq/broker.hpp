@@ -13,23 +13,29 @@ namespace relaymq {
 class Broker {
 public:
     using OutboundHandler = std::function<void(std::shared_ptr<Connection>, std::string)>;
+    using ClusterBroadcastHandler = std::function<void(std::string_view)>;
 
     Broker() = default;
     ~Broker() = default;
 
     void set_outbound_handler(OutboundHandler handler);
+    void set_cluster_broadcast_handler(ClusterBroadcastHandler handler);
     void add_connection(std::shared_ptr<Connection> conn);
     void remove_connection(const std::string& client_id);
     void handle_command(std::shared_ptr<Connection> conn, const Command& cmd);
     size_t total_connections();
     size_t total_subscriptions();
+    std::vector<std::string> active_subjects();
+    size_t local_subject_count(const std::string& subject);
     void close_all_connections();
 
 private:
     SubscriptionRegistry registry_;
     std::unordered_map<std::string, std::shared_ptr<Connection>> connections_;
+    std::unordered_map<std::string, size_t> local_subject_counts_;
     std::mutex broker_mutex_;
     OutboundHandler outbound_handler_;
+    ClusterBroadcastHandler cluster_broadcast_handler_;
 };
 
 }

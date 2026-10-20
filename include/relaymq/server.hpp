@@ -46,6 +46,11 @@ public:
     std::vector<std::string> peer_ids();
     bool send_to_peer(const std::string& node_id, std::string_view data);
     void broadcast_to_peers(std::string_view data);
+    std::vector<std::string> match_peers(std::string_view subject);
+    size_t total_remote_subscriptions();
+    std::vector<std::string> peer_subscriptions(const std::string& node_id);
+    std::vector<std::string> active_subjects();
+    size_t local_subject_count(const std::string& subject);
 
 private:
     int server_fd_;
