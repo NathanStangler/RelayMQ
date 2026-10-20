@@ -30,8 +30,34 @@ const std::string& Broker::auth_token() const {
     return auth_token_;
 }
 
-bool Broker::is_auth_required() const {
-    return !auth_token_.empty();
+void Broker::add_token_rule(const TokenRule& rule) {
+    if (rule.token.empty()) {
+        return;
+    }
+    std::shared_ptr<SubjectAcl> acl = std::make_shared<SubjectAcl>(false);
+    for (size_t i = 0; i < rule.allow_publish.size(); i++) {
+        acl->allow_publish(rule.allow_publish[i]);
+    }
+    for (size_t i = 0; i < rule.allow_subscribe.size(); i++) {
+        acl->allow_subscribe(rule.allow_subscribe[i]);
+    }
+
+    std::unique_lock<std::mutex> lock(broker_mutex_);
+    token_acls_[rule.token] = std::move(acl);
+    lock.unlock();
+}
+
+void Broker::clear_token_rules() {
+    std::unique_lock<std::mutex> lock(broker_mutex_);
+    token_acls_.clear();
+    lock.unlock();
+}
+
+bool Broker::is_auth_required() {
+    std::unique_lock<std::mutex> lock(broker_mutex_);
+    bool required = !auth_token_.empty() || !token_acls_.empty();
+    lock.unlock();
+    return required;
 }
 
 void Broker::add_connection(std::shared_ptr<Connection> conn) {
@@ -100,16 +126,34 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
 
     bool auth_required = false;
     std::string expected_token;
-    {
-        std::unique_lock<std::mutex> lock(broker_mutex_);
-        auth_required = !auth_token_.empty();
-        expected_token = auth_token_;
+    std::shared_ptr<SubjectAcl> matched_acl;
+    bool token_valid = false;
+
+    std::unique_lock<std::mutex> auth_lock(broker_mutex_);
+    auth_required = !auth_token_.empty() || !token_acls_.empty();
+    expected_token = auth_token_;
+
+    if (cmd.type == CommandType::AUTH) {
+        if (!expected_token.empty() && cmd.auth_token == expected_token) {
+            token_valid = true;
+            matched_acl = std::make_shared<SubjectAcl>(true);
+        } else {
+            auto it = token_acls_.find(cmd.auth_token);
+            if (it != token_acls_.end()) {
+                token_valid = true;
+                matched_acl = it->second;
+            }
+        }
     }
+    auth_lock.unlock();
 
     if (auth_required && !conn->is_authenticated()) {
         if (cmd.type == CommandType::AUTH) {
-            if (cmd.auth_token == expected_token) {
+            if (token_valid) {
                 conn->set_authenticated(true);
+                if (matched_acl) {
+                    conn->set_acl(matched_acl);
+                }
                 outbound_handler_(conn, ProtocolParser::format_ok());
             } else {
                 outbound_handler_(conn, ProtocolParser::format_err("Invalid Credentials"));
@@ -123,12 +167,20 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
     }
 
     if (cmd.type == CommandType::AUTH) {
+        if (token_valid && matched_acl) {
+            conn->set_acl(matched_acl);
+        }
         outbound_handler_(conn, ProtocolParser::format_ok());
         return;
     }
 
     switch (cmd.type) {
         case CommandType::PUB: {
+            if (!conn->acl().can_publish(cmd.subject)) {
+                outbound_handler_(conn, ProtocolParser::format_err("Permission Violation: Publish to " + cmd.subject + " denied"));
+                break;
+            }
+
             deliver_local(cmd.subject, cmd.payload, cmd.reply_to);
 
             RouteMsgHandler route_handler;
@@ -142,6 +194,11 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
             break;
         }
         case CommandType::SUB: {
+            if (!conn->acl().can_subscribe(cmd.subject)) {
+                outbound_handler_(conn, ProtocolParser::format_err("Permission Violation: Subscribe to " + cmd.subject + " denied"));
+                break;
+            }
+
             bool should_broadcast = false;
             std::unique_lock<std::mutex> lock(broker_mutex_);
             if (SubscriptionRegistry::is_valid_subject(cmd.subject)) {

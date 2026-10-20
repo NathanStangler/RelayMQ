@@ -31,6 +31,9 @@ bool Server::start(const ServerConfig& config) {
         : config.node_id;
     cluster_.init(config.cluster_name, assigned_node_id, config.cluster_token);
     broker_.set_auth_token(config.auth_token);
+    for (size_t i = 0; i < config.token_rules.size(); i++) {
+        broker_.add_token_rule(config.token_rules[i]);
+    }
 
     server_fd_ = net::create_tcp_listener(config.port, 128, &port_);
     if (server_fd_ < 0) {
@@ -255,7 +258,8 @@ void Server::event_loop() {
     epoll_event events[64];
 
     while (is_running_.load(std::memory_order_relaxed)) {
-        int timeout_ms = (!config_.auth_token.empty() && config_.auth_timeout_ms > 0) ? 500 : -1;
+        bool auth_required = broker_.is_auth_required();
+        int timeout_ms = (auth_required && config_.auth_timeout_ms > 0) ? 500 : -1;
         int num_ready = epoll_wait(epoll_fd_, events, 64, timeout_ms);
         if (num_ready < 0) {
             if (errno == EINTR) {
@@ -283,7 +287,7 @@ void Server::event_loop() {
             }
         }
 
-        if (!config_.auth_token.empty() && config_.auth_timeout_ms > 0) {
+        if (auth_required && config_.auth_timeout_ms > 0) {
             std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
             std::vector<int> expired_clients;
             for (auto it = clients_.begin(); it != clients_.end(); it++) {
@@ -322,7 +326,7 @@ void Server::accept_connection() {
         uint64_t cid = next_client_id_++;
         std::string client_id = "client_" + std::to_string(cid);
 
-        bool authenticated = config_.auth_token.empty();
+        bool authenticated = !broker_.is_auth_required();
         std::shared_ptr<Connection> conn = std::make_shared<Connection>(client_fd, client_id, authenticated);
         broker_.add_connection(conn);
         clients_[client_fd] = conn;

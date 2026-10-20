@@ -4,7 +4,7 @@
 namespace relaymq {
 
 Connection::Connection(int socket_fd, const std::string& client_id, bool authenticated)
-    : socket_fd_(socket_fd), client_id_(client_id), is_open_(true), is_authenticated_(authenticated), connected_at_(std::chrono::steady_clock::now()) {}
+    : socket_fd_(socket_fd), client_id_(client_id), is_open_(true), is_authenticated_(authenticated), connected_at_(std::chrono::steady_clock::now()), acl_(std::make_shared<SubjectAcl>(true)) {}
 
 Connection::~Connection() {
     close_connection();
@@ -32,6 +32,16 @@ void Connection::set_authenticated(bool authenticated) {
 
 std::chrono::steady_clock::time_point Connection::connected_at() const {
     return connected_at_;
+}
+
+const SubjectAcl& Connection::acl() const {
+    return *acl_;
+}
+
+void Connection::set_acl(std::shared_ptr<SubjectAcl> acl) {
+    if (acl) {
+        acl_ = std::move(acl);
+    }
 }
 
 ProtocolParser& Connection::parser() {

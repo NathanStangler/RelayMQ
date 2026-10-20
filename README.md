@@ -33,7 +33,7 @@ ctest --test-dir build --output-on-failure
 
 ```bash
 # Standalone broker
-./build/relay-server --port 9000 --auth-token secret123
+./build/relay-server --port 9000 --auth-token secret123 --token-rule "token:service.message.>:service.echo.>"
 
 # Clustered brokers
 ./build/relay-server --port 9001 --cluster-port 9101 --node-id node_1 --cluster-token cluster_secret

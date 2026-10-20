@@ -33,6 +33,7 @@ add_library(relaymq_core
     src/client.cpp
     src/peer.cpp
     src/cluster.cpp
+    src/acl.cpp
 )
 target_include_directories(relaymq_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -83,6 +84,7 @@ add_executable(relaymq_tests
     tests/test_client.cpp
     tests/test_cluster.cpp
     tests/test_auth.cpp
+    tests/test_acl.cpp
 )
 target_link_libraries(relaymq_tests PRIVATE
     relaymq_core

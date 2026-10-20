@@ -1,6 +1,7 @@
 #pragma once
 
 #include "relaymq/protocol.hpp"
+#include "relaymq/acl.hpp"
 #include <string>
 #include <memory>
 #include <atomic>
@@ -22,6 +23,8 @@ public:
     bool is_authenticated() const;
     void set_authenticated(bool authenticated);
     std::chrono::steady_clock::time_point connected_at() const;
+    const SubjectAcl& acl() const;
+    void set_acl(std::shared_ptr<SubjectAcl> acl);
     ProtocolParser& parser();
     void close_connection();
 
@@ -32,6 +35,7 @@ private:
     std::atomic<bool> is_open_;
     std::atomic<bool> is_authenticated_;
     std::chrono::steady_clock::time_point connected_at_;
+    std::shared_ptr<SubjectAcl> acl_;
 };
 
 }

@@ -30,6 +30,7 @@ struct ServerConfig {
     std::string auth_token = "";
     std::string cluster_token = "";
     int auth_timeout_ms = 2000;
+    std::vector<TokenRule> token_rules;
 };
 
 class Server {

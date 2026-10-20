@@ -2,13 +2,21 @@
 
 #include "relaymq/connection.hpp"
 #include "relaymq/subscription_registry.hpp"
+#include "relaymq/acl.hpp"
 #include <unordered_map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 #include <functional>
 
 namespace relaymq {
+
+struct TokenRule {
+    std::string token;
+    std::vector<std::string> allow_publish;
+    std::vector<std::string> allow_subscribe;
+};
 
 class Broker {
 public:
@@ -24,7 +32,9 @@ public:
     void set_route_msg_handler(RouteMsgHandler handler);
     void set_auth_token(const std::string& token);
     const std::string& auth_token() const;
-    bool is_auth_required() const;
+    void add_token_rule(const TokenRule& rule);
+    void clear_token_rules();
+    bool is_auth_required();
     void add_connection(std::shared_ptr<Connection> conn);
     void remove_connection(const std::string& client_id);
     void handle_command(std::shared_ptr<Connection> conn, const Command& cmd);
@@ -44,6 +54,7 @@ private:
     ClusterBroadcastHandler cluster_broadcast_handler_;
     RouteMsgHandler route_msg_handler_;
     std::string auth_token_;
+    std::unordered_map<std::string, std::shared_ptr<SubjectAcl>> token_acls_;
 };
 
 }
