@@ -1,10 +1,8 @@
 #include "relaymq/client.hpp"
+#include "relaymq/net.hpp"
 
 #include <unistd.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
 #include <chrono>
 #include <future>
 
@@ -26,27 +24,8 @@ bool Client::connect(const std::string& host, uint16_t port) {
     }
     parser_.clear();
 
-    socket_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    socket_fd_ = net::connect_tcp(host, port, false);
     if (socket_fd_ < 0) {
-        return false;
-    }
-
-    int nodelay = 1;
-    setsockopt(socket_fd_, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-
-    sockaddr_in server_addr{};
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-
-    if (inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr) <= 0) {
-        close(socket_fd_);
-        socket_fd_ = -1;
-        return false;
-    }
-
-    if (::connect(socket_fd_, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr)) < 0) {
-        close(socket_fd_);
-        socket_fd_ = -1;
         return false;
     }
 
@@ -58,11 +37,7 @@ bool Client::connect(const std::string& host, uint16_t port) {
 void Client::disconnect() {
     is_connected_ = false;
 
-    if (socket_fd_ >= 0) {
-        shutdown(socket_fd_, SHUT_RDWR);
-        close(socket_fd_);
-        socket_fd_ = -1;
-    }
+    net::close_socket(socket_fd_);
 
     if (receive_thread_.joinable()) {
         if (std::this_thread::get_id() != receive_thread_.get_id()) {
@@ -90,17 +65,10 @@ bool Client::send_raw(const std::string& data) {
         return false;
     }
 
-    size_t total_sent = 0;
-    const char* buffer = data.data();
-    size_t length = data.size();
-
-    while (total_sent < length) {
-        ssize_t sent = send(socket_fd_, buffer + total_sent, length - total_sent, MSG_NOSIGNAL);
-        if (sent <= 0) {
-            is_connected_ = false;
-            return false;
-        }
-        total_sent += static_cast<size_t>(sent);
+    ssize_t sent = net::send_all(socket_fd_, data);
+    if (sent < 0 || static_cast<size_t>(sent) < data.size()) {
+        is_connected_ = false;
+        return false;
     }
     return true;
 }
@@ -178,14 +146,15 @@ std::optional<Message> Client::request(const std::string& subject, const std::st
 
 int64_t Client::ping(int timeout_ms) {
     std::unique_lock<std::mutex> lock(pong_mutex_);
-    if (!is_connected_) {
+    if (!is_connected_ || socket_fd_ < 0) {
         return -1;
     }
 
     awaiting_pong_ = true;
     std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
 
-    if (!send_raw(ProtocolParser::format_ping())) {
+    std::string ping_msg = ProtocolParser::format_ping();
+    if (!send_raw(ping_msg)) {
         awaiting_pong_ = false;
         return -1;
     }

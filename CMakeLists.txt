@@ -24,6 +24,7 @@ find_package(Threads REQUIRED)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 add_library(relaymq_core
+    src/net.cpp
     src/protocol.cpp
     src/subscription_registry.cpp
     src/connection.cpp

@@ -1,9 +1,5 @@
 #include "relaymq/peer.hpp"
-
-#include <unistd.h>
-#include <sys/socket.h>
-#include <cerrno>
-#include <thread>
+#include "relaymq/net.hpp"
 
 namespace relaymq {
 
@@ -62,19 +58,11 @@ bool Peer::send(std::string_view data) {
         return false;
     }
 
-    size_t total_sent = 0;
-    while (total_sent < data.size()) {
-        ssize_t sent = ::send(fd, data.data() + total_sent, data.size() - total_sent, MSG_NOSIGNAL);
-        if (sent <= 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                std::this_thread::yield();
-                continue;
-            }
-            is_connected_.store(false, std::memory_order_release);
-            lock.unlock();
-            return false;
-        }
-        total_sent += static_cast<size_t>(sent);
+    ssize_t sent = net::send_all(fd, data);
+    if (sent < 0 || static_cast<size_t>(sent) < data.size()) {
+        is_connected_.store(false, std::memory_order_release);
+        lock.unlock();
+        return false;
     }
     lock.unlock();
     return true;
@@ -85,7 +73,7 @@ void Peer::close_connection() {
     if (is_connected_.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) {
         int fd = socket_fd_.exchange(-1, std::memory_order_acq_rel);
         if (fd >= 0) {
-            close(fd);
+            net::close_socket(fd);
         }
     }
 }

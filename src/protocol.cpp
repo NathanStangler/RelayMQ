@@ -86,7 +86,200 @@ std::vector<std::string_view> ProtocolParser::split_tokens(std::string_view line
     return tokens;
 }
 
-bool ProtocolParser::next_command(Command& out_cmd) {
+bool ProtocolParser::parse_simple_command(CommandType type, size_t line_end, Command& cmd) {
+    buffer_.erase(0, line_end + 2);
+    cmd = Command{};
+    cmd.type = type;
+    return true;
+}
+
+bool ProtocolParser::parse_single_subject_command(CommandType type, const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd) {
+    std::string action_name = to_string(type);
+    if (tokens.size() < 2) {
+        buffer_.erase(0, line_end + 2);
+        cmd = Command{};
+        cmd.type = CommandType::ERR;
+        cmd.error_message = "Invalid " + action_name + " syntax: expected " + action_name + " <subject>";
+        return true;
+    }
+    std::string subject(tokens[1]);
+    buffer_.erase(0, line_end + 2);
+    cmd = Command{};
+    cmd.type = type;
+    cmd.subject = std::move(subject);
+    return true;
+}
+
+bool ProtocolParser::parse_payload_command(CommandType type, const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd) {
+    std::string action_name = to_string(type);
+    if (tokens.size() < 3) {
+        buffer_.erase(0, line_end + 2);
+        cmd = Command{};
+        cmd.type = CommandType::ERR;
+        cmd.error_message = "Invalid " + action_name + " syntax: expected " + action_name + " <subject> [reply-to] <bytes>";
+        return true;
+    }
+
+    std::string_view subject = tokens[1];
+    std::string_view reply_to;
+    size_t payload_len = 0;
+
+    if (tokens.size() == 3) {
+        if (!parse_uint64(tokens[2], payload_len)) {
+            buffer_.erase(0, line_end + 2);
+            cmd = Command{};
+            cmd.type = CommandType::ERR;
+            cmd.error_message = "Invalid byte length in " + action_name + " command";
+            return true;
+        }
+    } else {
+        reply_to = tokens[2];
+        if (!parse_uint64(tokens[3], payload_len)) {
+            buffer_.erase(0, line_end + 2);
+            cmd = Command{};
+            cmd.type = CommandType::ERR;
+            cmd.error_message = "Invalid byte length in " + action_name + " command";
+            return true;
+        }
+    }
+
+    size_t total_required = line_end + payload_len + 4;
+    if (buffer_.size() < total_required) {
+        return false;
+    }
+
+    std::string s_subject(subject);
+    std::string s_reply_to(reply_to);
+    std::string payload = buffer_.substr(line_end + 2, payload_len);
+    buffer_.erase(0, total_required);
+
+    cmd = Command{};
+    cmd.type = type;
+    cmd.subject = std::move(s_subject);
+    cmd.reply_to = std::move(s_reply_to);
+    cmd.payload = std::move(payload);
+    return true;
+}
+
+bool ProtocolParser::parse_sub(const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd) {
+    if (tokens.size() < 3) {
+        buffer_.erase(0, line_end + 2);
+        cmd = Command{};
+        cmd.type = CommandType::ERR;
+        cmd.error_message = "Invalid SUB syntax: expected SUB <subject> <sid>";
+        return true;
+    }
+    std::string sub_subject(tokens[1]);
+    std::string sub_sid(tokens[2]);
+    buffer_.erase(0, line_end + 2);
+    cmd = Command{};
+    cmd.type = CommandType::SUB;
+    cmd.subject = std::move(sub_subject);
+    cmd.sid = std::move(sub_sid);
+    return true;
+}
+
+bool ProtocolParser::parse_unsub(const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd) {
+    if (tokens.size() < 2) {
+        buffer_.erase(0, line_end + 2);
+        cmd = Command{};
+        cmd.type = CommandType::ERR;
+        cmd.error_message = "Invalid UNSUB syntax: expected UNSUB <sid>";
+        return true;
+    }
+    std::string unsub_sid(tokens[1]);
+    buffer_.erase(0, line_end + 2);
+    cmd = Command{};
+    cmd.type = CommandType::UNSUB;
+    cmd.sid = std::move(unsub_sid);
+    return true;
+}
+
+bool ProtocolParser::parse_msg(const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd) {
+    if (tokens.size() < 4) {
+        buffer_.erase(0, line_end + 2);
+        cmd = Command{};
+        cmd.type = CommandType::ERR;
+        cmd.error_message = "Invalid MSG syntax: expected MSG <subject> <sid> [reply-to] <bytes>";
+        return true;
+    }
+
+    std::string_view subject = tokens[1];
+    std::string_view sid = tokens[2];
+    std::string_view reply_to;
+    size_t payload_len = 0;
+
+    if (tokens.size() == 4) {
+        if (!parse_uint64(tokens[3], payload_len)) {
+            buffer_.erase(0, line_end + 2);
+            cmd = Command{};
+            cmd.type = CommandType::ERR;
+            cmd.error_message = "Invalid byte length in MSG command";
+            return true;
+        }
+    } else {
+        reply_to = tokens[3];
+        if (!parse_uint64(tokens[4], payload_len)) {
+            buffer_.erase(0, line_end + 2);
+            cmd = Command{};
+            cmd.type = CommandType::ERR;
+            cmd.error_message = "Invalid byte length in MSG command";
+            return true;
+        }
+    }
+
+    size_t total_required = line_end + payload_len + 4;
+    if (buffer_.size() < total_required) {
+        return false;
+    }
+
+    std::string msg_subject(subject);
+    std::string msg_sid(sid);
+    std::string msg_reply_to(reply_to);
+    std::string payload = buffer_.substr(line_end + 2, payload_len);
+    buffer_.erase(0, total_required);
+
+    cmd = Command{};
+    cmd.type = CommandType::MSG;
+    cmd.subject = std::move(msg_subject);
+    cmd.sid = std::move(msg_sid);
+    cmd.reply_to = std::move(msg_reply_to);
+    cmd.payload = std::move(payload);
+    return true;
+}
+
+bool ProtocolParser::parse_route_connect(const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd) {
+    if (tokens.size() < 3) {
+        buffer_.erase(0, line_end + 2);
+        cmd = Command{};
+        cmd.type = CommandType::ERR;
+        cmd.error_message = "Invalid ROUTE_CONNECT syntax: expected ROUTE_CONNECT <cluster_name> <node_id>";
+        return true;
+    }
+    std::string cname(tokens[1]);
+    std::string nid(tokens[2]);
+    buffer_.erase(0, line_end + 2);
+    cmd = Command{};
+    cmd.type = CommandType::ROUTE_CONNECT;
+    cmd.cluster_name = std::move(cname);
+    cmd.node_id = std::move(nid);
+    return true;
+}
+
+bool ProtocolParser::parse_err(std::string_view line, std::string_view action, size_t line_end, Command& cmd) {
+    std::string err_msg;
+    if (line.size() > action.size()) {
+        std::string_view msg_view = line.substr(action.size() + 1);
+        err_msg = std::string(msg_view);
+    }
+    buffer_.erase(0, line_end + 2);
+    cmd = Command{};
+    cmd.type = CommandType::ERR;
+    cmd.error_message = err_msg;
+    return true;
+}
+
+bool ProtocolParser::next_command(Command& cmd) {
     while (true) {
         size_t line_end = buffer_.find("\r\n");
         if (line_end == std::string::npos) {
@@ -101,298 +294,56 @@ bool ProtocolParser::next_command(Command& out_cmd) {
             continue;
         }
 
-        std::string_view verb = tokens[0];
+        std::string_view action = tokens[0];
 
-        if (equals_ignore_case(verb, "PING")) {
-            buffer_.erase(0, line_end + 2);
-            out_cmd = Command{};
-            out_cmd.type = CommandType::PING;
-            return true;
+        if (equals_ignore_case(action, "PUB")) {
+            return parse_payload_command(CommandType::PUB, tokens, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "RMSG")) {
+            return parse_payload_command(CommandType::RMSG, tokens, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "SUB")) {
+            return parse_sub(tokens, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "UNSUB")) {
+            return parse_unsub(tokens, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "MSG")) {
+            return parse_msg(tokens, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "ROUTE_CONNECT")) {
+            return parse_route_connect(tokens, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "RSUB")) {
+            return parse_single_subject_command(CommandType::RSUB, tokens, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "RUNSUB")) {
+            return parse_single_subject_command(CommandType::RUNSUB, tokens, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "PING")) {
+            return parse_simple_command(CommandType::PING, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "PONG")) {
+            return parse_simple_command(CommandType::PONG, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "RPING")) {
+            return parse_simple_command(CommandType::RPING, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "RPONG")) {
+            return parse_simple_command(CommandType::RPONG, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "OK")) {
+            return parse_simple_command(CommandType::OK, line_end, cmd);
+        }
+        if (equals_ignore_case(action, "ERR")) {
+            return parse_err(line, action, line_end, cmd);
         }
 
-        if (equals_ignore_case(verb, "PONG")) {
-            buffer_.erase(0, line_end + 2);
-            out_cmd = Command{};
-            out_cmd.type = CommandType::PONG;
-            return true;
-        }
-
-        if (equals_ignore_case(verb, "OK")) {
-            buffer_.erase(0, line_end + 2);
-            out_cmd = Command{};
-            out_cmd.type = CommandType::OK;
-            return true;
-        }
-
-        if (equals_ignore_case(verb, "ERR")) {
-            std::string err_msg;
-            if (line.size() > verb.size()) {
-                std::string_view msg_view = line.substr(verb.size() + 1);
-                err_msg = std::string(msg_view);
-            }
-            buffer_.erase(0, line_end + 2);
-            out_cmd = Command{};
-            out_cmd.type = CommandType::ERR;
-            out_cmd.error_message = err_msg;
-            return true;
-        }
-
-        if (equals_ignore_case(verb, "SUB")) {
-            if (tokens.size() < 3) {
-                buffer_.erase(0, line_end + 2);
-                out_cmd = Command{};
-                out_cmd.type = CommandType::ERR;
-                out_cmd.error_message = "Invalid SUB syntax: expected SUB <subject> <sid>";
-                return true;
-            }
-            std::string sub_subject(tokens[1]);
-            std::string sub_sid(tokens[2]);
-            buffer_.erase(0, line_end + 2);
-            out_cmd = Command{};
-            out_cmd.type = CommandType::SUB;
-            out_cmd.subject = std::move(sub_subject);
-            out_cmd.sid = std::move(sub_sid);
-            return true;
-        }
-
-        if (equals_ignore_case(verb, "UNSUB")) {
-            if (tokens.size() < 2) {
-                buffer_.erase(0, line_end + 2);
-                out_cmd = Command{};
-                out_cmd.type = CommandType::ERR;
-                out_cmd.error_message = "Invalid UNSUB syntax: expected UNSUB <sid>";
-                return true;
-            }
-            std::string unsub_sid(tokens[1]);
-            buffer_.erase(0, line_end + 2);
-            out_cmd = Command{};
-            out_cmd.type = CommandType::UNSUB;
-            out_cmd.sid = std::move(unsub_sid);
-            return true;
-        }
-
-        if (equals_ignore_case(verb, "PUB")) {
-            if (tokens.size() < 3) {
-                buffer_.erase(0, line_end + 2);
-                out_cmd = Command{};
-                out_cmd.type = CommandType::ERR;
-                out_cmd.error_message = "Invalid PUB syntax: expected PUB <subject> [reply-to] <bytes>";
-                return true;
-            }
-
-            std::string_view subject = tokens[1];
-            std::string_view reply_to;
-            size_t payload_len = 0;
-
-            if (tokens.size() == 3) {
-                if (!parse_uint64(tokens[2], payload_len)) {
-                    buffer_.erase(0, line_end + 2);
-                    out_cmd = Command{};
-                    out_cmd.type = CommandType::ERR;
-                    out_cmd.error_message = "Invalid byte length in PUB command";
-                    return true;
-                }
-            } else {
-                reply_to = tokens[2];
-                if (!parse_uint64(tokens[3], payload_len)) {
-                    buffer_.erase(0, line_end + 2);
-                    out_cmd = Command{};
-                    out_cmd.type = CommandType::ERR;
-                    out_cmd.error_message = "Invalid byte length in PUB command";
-                    return true;
-                }
-            }
-
-            size_t total_required = line_end + payload_len + 4;
-            if (buffer_.size() < total_required) {
-                return false;
-            }
-
-            std::string pub_subject(subject);
-            std::string pub_reply_to(reply_to);
-            std::string payload = buffer_.substr(line_end + 2, payload_len);
-            buffer_.erase(0, total_required);
-
-            out_cmd = Command{};
-            out_cmd.type = CommandType::PUB;
-            out_cmd.subject = std::move(pub_subject);
-            out_cmd.reply_to = std::move(pub_reply_to);
-            out_cmd.payload = std::move(payload);
-            return true;
-        }
-
-        if (equals_ignore_case(verb, "MSG")) {
-            if (tokens.size() < 4) {
-                buffer_.erase(0, line_end + 2);
-                out_cmd = Command{};
-                out_cmd.type = CommandType::ERR;
-                out_cmd.error_message = "Invalid MSG syntax: expected MSG <subject> <sid> [reply-to] <bytes>";
-                return true;
-            }
-
-            std::string_view subject = tokens[1];
-            std::string_view sid = tokens[2];
-            std::string_view reply_to;
-            size_t payload_len = 0;
-
-            if (tokens.size() == 4) {
-                if (!parse_uint64(tokens[3], payload_len)) {
-                    buffer_.erase(0, line_end + 2);
-                    out_cmd = Command{};
-                    out_cmd.type = CommandType::ERR;
-                    out_cmd.error_message = "Invalid byte length in MSG command";
-                    return true;
-                }
-            } else {
-                reply_to = tokens[3];
-                if (!parse_uint64(tokens[4], payload_len)) {
-                    buffer_.erase(0, line_end + 2);
-                    out_cmd = Command{};
-                    out_cmd.type = CommandType::ERR;
-                    out_cmd.error_message = "Invalid byte length in MSG command";
-                    return true;
-                }
-            }
-
-            size_t total_required = line_end + payload_len + 4;
-            if (buffer_.size() < total_required) {
-                return false;
-            }
-
-            std::string msg_subject(subject);
-            std::string msg_sid(sid);
-            std::string msg_reply_to(reply_to);
-            std::string payload = buffer_.substr(line_end + 2, payload_len);
-            buffer_.erase(0, total_required);
-
-            out_cmd = Command{};
-            out_cmd.type = CommandType::MSG;
-            out_cmd.subject = std::move(msg_subject);
-            out_cmd.sid = std::move(msg_sid);
-            out_cmd.reply_to = std::move(msg_reply_to);
-            out_cmd.payload = std::move(payload);
-            return true;
-        }
-
-        if (equals_ignore_case(verb, "ROUTE_CONNECT")) {
-            if (tokens.size() < 3) {
-                buffer_.erase(0, line_end + 2);
-                out_cmd = Command{};
-                out_cmd.type = CommandType::ERR;
-                out_cmd.error_message = "Invalid ROUTE_CONNECT syntax: expected ROUTE_CONNECT <cluster_name> <node_id>";
-                return true;
-            }
-            std::string cname(tokens[1]);
-            std::string nid(tokens[2]);
-            buffer_.erase(0, line_end + 2);
-            out_cmd = Command{};
-            out_cmd.type = CommandType::ROUTE_CONNECT;
-            out_cmd.cluster_name = std::move(cname);
-            out_cmd.node_id = std::move(nid);
-            return true;
-        }
-
-        if (equals_ignore_case(verb, "RSUB")) {
-            if (tokens.size() < 2) {
-                buffer_.erase(0, line_end + 2);
-                out_cmd = Command{};
-                out_cmd.type = CommandType::ERR;
-                out_cmd.error_message = "Invalid RSUB syntax: expected RSUB <subject>";
-                return true;
-            }
-            std::string rsub_subject(tokens[1]);
-            buffer_.erase(0, line_end + 2);
-            out_cmd = Command{};
-            out_cmd.type = CommandType::RSUB;
-            out_cmd.subject = std::move(rsub_subject);
-            return true;
-        }
-
-        if (equals_ignore_case(verb, "RUNSUB")) {
-            if (tokens.size() < 2) {
-                buffer_.erase(0, line_end + 2);
-                out_cmd = Command{};
-                out_cmd.type = CommandType::ERR;
-                out_cmd.error_message = "Invalid RUNSUB syntax: expected RUNSUB <subject>";
-                return true;
-            }
-            std::string runsub_subject(tokens[1]);
-            buffer_.erase(0, line_end + 2);
-            out_cmd = Command{};
-            out_cmd.type = CommandType::RUNSUB;
-            out_cmd.subject = std::move(runsub_subject);
-            return true;
-        }
-
-        if (equals_ignore_case(verb, "RMSG")) {
-            if (tokens.size() < 3) {
-                buffer_.erase(0, line_end + 2);
-                out_cmd = Command{};
-                out_cmd.type = CommandType::ERR;
-                out_cmd.error_message = "Invalid RMSG syntax: expected RMSG <subject> [reply-to] <bytes>";
-                return true;
-            }
-
-            std::string_view subject = tokens[1];
-            std::string_view reply_to;
-            size_t payload_len = 0;
-
-            if (tokens.size() == 3) {
-                if (!parse_uint64(tokens[2], payload_len)) {
-                    buffer_.erase(0, line_end + 2);
-                    out_cmd = Command{};
-                    out_cmd.type = CommandType::ERR;
-                    out_cmd.error_message = "Invalid byte length in RMSG command";
-                    return true;
-                }
-            } else {
-                reply_to = tokens[2];
-                if (!parse_uint64(tokens[3], payload_len)) {
-                    buffer_.erase(0, line_end + 2);
-                    out_cmd = Command{};
-                    out_cmd.type = CommandType::ERR;
-                    out_cmd.error_message = "Invalid byte length in RMSG command";
-                    return true;
-                }
-            }
-
-            size_t total_required = line_end + payload_len + 4;
-            if (buffer_.size() < total_required) {
-                return false;
-            }
-
-            std::string rmsg_subject(subject);
-            std::string rmsg_reply_to(reply_to);
-            std::string payload = buffer_.substr(line_end + 2, payload_len);
-            buffer_.erase(0, total_required);
-
-            out_cmd = Command{};
-            out_cmd.type = CommandType::RMSG;
-            out_cmd.subject = std::move(rmsg_subject);
-            out_cmd.reply_to = std::move(rmsg_reply_to);
-            out_cmd.payload = std::move(payload);
-            return true;
-        }
-
-        if (equals_ignore_case(verb, "RPING")) {
-            buffer_.erase(0, line_end + 2);
-            out_cmd = Command{};
-            out_cmd.type = CommandType::RPING;
-            return true;
-        }
-
-        if (equals_ignore_case(verb, "RPONG")) {
-            buffer_.erase(0, line_end + 2);
-            out_cmd = Command{};
-            out_cmd.type = CommandType::RPONG;
-            return true;
-        }
-
-        std::string unknown_verb(tokens[0]);
+        std::string unknown_action(tokens[0]);
         buffer_.erase(0, line_end + 2);
-        out_cmd = Command{};
-        out_cmd.type = CommandType::ERR;
-        out_cmd.error_message = "Unknown command: " + unknown_verb;
+        cmd = Command{};
+        cmd.type = CommandType::ERR;
+        cmd.error_message = "Unknown command: " + unknown_action;
         return true;
     }
 }

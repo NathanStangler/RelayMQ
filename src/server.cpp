@@ -1,12 +1,11 @@
 #include "relaymq/server.hpp"
+#include "relaymq/net.hpp"
 
 #include <unistd.h>
-#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <netinet/in.h>
-#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <cstring>
 #include <cerrno>
@@ -27,56 +26,25 @@ bool Server::start(const ServerConfig& config) {
         return false;
     }
 
-    std::string assigned_node_id;
-    if (!config.node_id.empty()) {
-        assigned_node_id = config.node_id;
-    } else {
-        assigned_node_id = "node_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    }
+    std::string assigned_node_id = config.node_id.empty()
+        ? "node_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())
+        : config.node_id;
     cluster_.init(config.cluster_name, assigned_node_id);
 
-    server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    server_fd_ = net::create_tcp_listener(config.port, 128, &port_);
     if (server_fd_ < 0) {
         is_running_.store(false, std::memory_order_release);
         return false;
     }
 
-    int opt = 1;
-    setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    int flags = fcntl(server_fd_, F_GETFL, 0);
-    fcntl(server_fd_, F_SETFL, flags | O_NONBLOCK);
-
-    sockaddr_in server_addr{};
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(config.port);
-
-    if (bind(server_fd_, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr)) < 0) {
-        close(server_fd_);
-        server_fd_ = -1;
-        is_running_.store(false, std::memory_order_release);
-        return false;
-    }
-
-    if (listen(server_fd_, 128) < 0) {
-        close(server_fd_);
-        server_fd_ = -1;
-        is_running_.store(false, std::memory_order_release);
-        return false;
-    }
-
-    socklen_t addr_len = sizeof(server_addr);
-    if (getsockname(server_fd_, reinterpret_cast<struct sockaddr*>(&server_addr), &addr_len) == 0) {
-        port_ = ntohs(server_addr.sin_port);
-    } else {
-        port_ = config.port;
+    if (config.enable_clustering || config.cluster_port > 0 || !config.peers.empty()) {
+        cluster_server_fd_ = net::create_tcp_listener(config.cluster_port, 64, &cluster_port_);
     }
 
     epoll_fd_ = epoll_create1(0);
     if (epoll_fd_ < 0) {
-        close(server_fd_);
-        server_fd_ = -1;
+        net::close_socket(server_fd_);
+        net::close_socket(cluster_server_fd_);
         is_running_.store(false, std::memory_order_release);
         return false;
     }
@@ -84,9 +52,9 @@ bool Server::start(const ServerConfig& config) {
     stop_event_fd_ = eventfd(0, EFD_NONBLOCK);
     if (stop_event_fd_ < 0) {
         close(epoll_fd_);
-        close(server_fd_);
         epoll_fd_ = -1;
-        server_fd_ = -1;
+        net::close_socket(server_fd_);
+        net::close_socket(cluster_server_fd_);
         is_running_.store(false, std::memory_order_release);
         return false;
     }
@@ -101,36 +69,11 @@ bool Server::start(const ServerConfig& config) {
     stop_ev.data.fd = stop_event_fd_;
     epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, stop_event_fd_, &stop_ev);
 
-    if (config.enable_clustering || config.cluster_port > 0 || !config.peers.empty()) {
-        cluster_server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-        if (cluster_server_fd_ >= 0) {
-            setsockopt(cluster_server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-            int cflags = fcntl(cluster_server_fd_, F_GETFL, 0);
-            fcntl(cluster_server_fd_, F_SETFL, cflags | O_NONBLOCK);
-
-            sockaddr_in cluster_addr{};
-            cluster_addr.sin_family = AF_INET;
-            cluster_addr.sin_addr.s_addr = INADDR_ANY;
-            cluster_addr.sin_port = htons(config.cluster_port);
-
-            if (bind(cluster_server_fd_, reinterpret_cast<struct sockaddr*>(&cluster_addr), sizeof(cluster_addr)) == 0 &&
-                listen(cluster_server_fd_, 64) == 0) {
-                socklen_t clen = sizeof(cluster_addr);
-                if (getsockname(cluster_server_fd_, reinterpret_cast<struct sockaddr*>(&cluster_addr), &clen) == 0) {
-                    cluster_port_ = ntohs(cluster_addr.sin_port);
-                } else {
-                    cluster_port_ = config.cluster_port;
-                }
-
-                epoll_event cluster_ev{};
-                cluster_ev.events = EPOLLIN;
-                cluster_ev.data.fd = cluster_server_fd_;
-                epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, cluster_server_fd_, &cluster_ev);
-            } else {
-                close(cluster_server_fd_);
-                cluster_server_fd_ = -1;
-            }
-        }
+    if (cluster_server_fd_ >= 0) {
+        epoll_event cluster_ev{};
+        cluster_ev.events = EPOLLIN;
+        cluster_ev.data.fd = cluster_server_fd_;
+        epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, cluster_server_fd_, &cluster_ev);
     }
 
     broker_.set_outbound_handler([this](std::shared_ptr<Connection> conn, std::string data) {
@@ -217,17 +160,8 @@ void Server::stop() {
         stop_event_fd_ = -1;
     }
 
-    if (server_fd_ >= 0) {
-        shutdown(server_fd_, SHUT_RDWR);
-        close(server_fd_);
-        server_fd_ = -1;
-    }
-
-    if (cluster_server_fd_ >= 0) {
-        shutdown(cluster_server_fd_, SHUT_RDWR);
-        close(cluster_server_fd_);
-        cluster_server_fd_ = -1;
-    }
+    net::close_socket(server_fd_);
+    net::close_socket(cluster_server_fd_);
 
     cluster_.close_all();
     broker_.close_all_connections();
@@ -267,30 +201,10 @@ bool Server::connect_to_peer(const std::string& host, uint16_t port) {
         return false;
     }
 
-    int peer_fd = socket(AF_INET, SOCK_STREAM, 0);
+    int peer_fd = net::connect_tcp(host, port, true);
     if (peer_fd < 0) {
         return false;
     }
-
-    int nodelay = 1;
-    setsockopt(peer_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-
-    sockaddr_in peer_addr{};
-    peer_addr.sin_family = AF_INET;
-    peer_addr.sin_port = htons(port);
-
-    if (inet_pton(AF_INET, host.c_str(), &peer_addr.sin_addr) <= 0) {
-        close(peer_fd);
-        return false;
-    }
-
-    if (::connect(peer_fd, reinterpret_cast<struct sockaddr*>(&peer_addr), sizeof(peer_addr)) < 0) {
-        close(peer_fd);
-        return false;
-    }
-
-    int flags = fcntl(peer_fd, F_GETFL, 0);
-    fcntl(peer_fd, F_SETFL, flags | O_NONBLOCK);
 
     std::shared_ptr<Peer> peer = cluster_.add_peer(peer_fd);
     peer->set_endpoint(host, port);
@@ -320,8 +234,7 @@ void Server::accept_cluster_connection() {
             break;
         }
 
-        int nodelay = 1;
-        setsockopt(peer_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+        net::set_tcp_nodelay(peer_fd, true);
 
         std::shared_ptr<Peer> peer = cluster_.add_peer(peer_fd);
         char peer_ip[INET_ADDRSTRLEN];
@@ -386,8 +299,7 @@ void Server::accept_connection() {
             break;
         }
 
-        int nodelay = 1;
-        setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+        net::set_tcp_nodelay(client_fd, true);
 
         uint64_t cid = next_client_id_++;
         std::string client_id = "client_" + std::to_string(cid);
@@ -518,25 +430,7 @@ void Server::flush_batch(int fd, std::string& batch) {
     if (fd < 0 || batch.empty()) {
         return;
     }
-
-    size_t total_sent = 0;
-    int retries = 0;
-    while (is_running_.load(std::memory_order_relaxed) && total_sent < batch.size()) {
-        ssize_t sent = send(fd, batch.data() + total_sent, batch.size() - total_sent, MSG_NOSIGNAL);
-        if (sent <= 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                retries++;
-                if (retries > 1000) {
-                    break;
-                }
-                std::this_thread::yield();
-                continue;
-            }
-            break;
-        }
-        total_sent += static_cast<size_t>(sent);
-        retries = 0;
-    }
+    net::send_all(fd, batch, 1000);
     batch.clear();
 }
 

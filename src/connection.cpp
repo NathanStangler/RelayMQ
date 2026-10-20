@@ -1,7 +1,5 @@
 #include "relaymq/connection.hpp"
-
-#include <unistd.h>
-#include <sys/socket.h>
+#include "relaymq/net.hpp"
 
 namespace relaymq {
 
@@ -32,7 +30,7 @@ void Connection::close_connection() {
     if (is_open_.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) {
         int fd = socket_fd_.exchange(-1, std::memory_order_acq_rel);
         if (fd >= 0) {
-            close(fd);
+            net::close_socket(fd);
         }
     }
 }

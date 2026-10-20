@@ -66,6 +66,14 @@ private:
     std::string buffer_;
 
     static std::vector<std::string_view> split_tokens(std::string_view line);
+    bool parse_simple_command(CommandType type, size_t line_end, Command& cmd);
+    bool parse_single_subject_command(CommandType type, const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd);
+    bool parse_payload_command(CommandType type, const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd);
+    bool parse_sub(const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd);
+    bool parse_unsub(const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd);
+    bool parse_msg(const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd);
+    bool parse_route_connect(const std::vector<std::string_view>& tokens, size_t line_end, Command& cmd);
+    bool parse_err(std::string_view line, std::string_view action, size_t line_end, Command& cmd);
 };
 
 }
