@@ -144,6 +144,10 @@ bool Server::start(const ServerConfig& config) {
         cluster_.broadcast(data);
     });
 
+    broker_.set_route_msg_handler([this](const std::string& subject, const std::string& payload, const std::string& reply_to) {
+        cluster_.route_message(subject, payload, reply_to);
+    });
+
     cluster_.set_peer_connect_handler([this](std::shared_ptr<Peer> peer) {
         if (!peer) {
             return;
@@ -152,6 +156,10 @@ bool Server::start(const ServerConfig& config) {
         for (size_t i = 0; i < subjects.size(); i++) {
             peer->send(ProtocolParser::format_rsub(subjects[i]));
         }
+    });
+
+    cluster_.set_inbound_route_msg_handler([this](const std::string& subject, const std::string& payload, const std::string& reply_to) {
+        broker_.deliver_local(subject, payload, reply_to);
     });
 
     writer_thread_ = std::thread(&Server::writer_loop, this);

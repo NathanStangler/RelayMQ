@@ -59,6 +59,12 @@ void Cluster::set_peer_connect_handler(PeerConnectHandler handler) {
     lock.unlock();
 }
 
+void Cluster::set_inbound_route_msg_handler(InboundRouteMsgHandler handler) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    inbound_route_msg_handler_ = std::move(handler);
+    lock.unlock();
+}
+
 std::shared_ptr<Peer> Cluster::remove_peer(int socket_fd) {
     std::shared_ptr<Peer> peer;
     std::unique_lock<std::mutex> lock(mutex_);
@@ -122,8 +128,17 @@ void Cluster::handle_command(std::shared_ptr<Peer> peer, const Command& cmd) {
             remove_remote_subscription(peer->node_id(), cmd.subject);
             break;
         }
-        case CommandType::RMSG:
+        case CommandType::RMSG: {
+            InboundRouteMsgHandler inbound_handler;
+            std::unique_lock<std::mutex> lock(mutex_);
+            inbound_handler = inbound_route_msg_handler_;
+            lock.unlock();
+
+            if (inbound_handler) {
+                inbound_handler(cmd.subject, cmd.payload, cmd.reply_to);
+            }
             break;
+        }
         default:
             break;
     }
@@ -177,6 +192,17 @@ void Cluster::broadcast(std::string_view data) {
 
     for (size_t i = 0; i < active_peers.size(); i++) {
         active_peers[i]->send(data);
+    }
+}
+
+void Cluster::route_message(const std::string& subject, const std::string& payload, const std::string& reply_to) {
+    std::vector<std::string> target_peers = match_peers(subject);
+    if (target_peers.empty()) {
+        return;
+    }
+    std::string rmsg = ProtocolParser::format_rmsg(subject, payload, reply_to);
+    for (size_t i = 0; i < target_peers.size(); i++) {
+        send_to_peer(target_peers[i], rmsg);
     }
 }
 

@@ -16,6 +16,7 @@ namespace relaymq {
 class Cluster {
 public:
     using PeerConnectHandler = std::function<void(std::shared_ptr<Peer>)>;
+    using InboundRouteMsgHandler = std::function<void(const std::string& subject, const std::string& payload, const std::string& reply_to)>;
 
     Cluster() = default;
     ~Cluster();
@@ -27,6 +28,7 @@ public:
     const std::string& cluster_name() const;
     const std::string& node_id() const;
     void set_peer_connect_handler(PeerConnectHandler handler);
+    void set_inbound_route_msg_handler(InboundRouteMsgHandler handler);
     std::shared_ptr<Peer> add_peer(int socket_fd);
     std::shared_ptr<Peer> find_peer(int socket_fd);
     std::shared_ptr<Peer> find_peer(const std::string& node_id);
@@ -36,6 +38,7 @@ public:
     std::vector<std::string> peer_ids();
     bool send_to_peer(const std::string& node_id, std::string_view data);
     void broadcast(std::string_view data);
+    void route_message(const std::string& subject, const std::string& payload, const std::string& reply_to = "");
     void add_remote_subscription(const std::string& node_id, const std::string& subject);
     bool remove_remote_subscription(const std::string& node_id, const std::string& subject);
     void remove_all_remote_subscriptions(const std::string& node_id);
@@ -49,6 +52,7 @@ private:
     std::string node_id_;
     std::mutex mutex_;
     PeerConnectHandler peer_connect_handler_;
+    InboundRouteMsgHandler inbound_route_msg_handler_;
     std::unordered_map<int, std::shared_ptr<Peer>> peers_;
     std::unordered_map<std::string, std::shared_ptr<Peer>> node_peers_;
     std::unordered_map<std::string, std::unordered_set<std::string>> peer_subscriptions_;

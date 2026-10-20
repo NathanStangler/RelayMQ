@@ -14,6 +14,12 @@ void Broker::set_cluster_broadcast_handler(ClusterBroadcastHandler handler) {
     lock.unlock();
 }
 
+void Broker::set_route_msg_handler(RouteMsgHandler handler) {
+    std::unique_lock<std::mutex> lock(broker_mutex_);
+    route_msg_handler_ = std::move(handler);
+    lock.unlock();
+}
+
 void Broker::add_connection(std::shared_ptr<Connection> conn) {
     if (!conn) {
         return;
@@ -50,6 +56,29 @@ void Broker::remove_connection(const std::string& client_id) {
     }
 }
 
+void Broker::deliver_local(const std::string& subject, const std::string& payload, const std::string& reply_to) {
+    if (!outbound_handler_) {
+        return;
+    }
+
+    std::vector<std::pair<std::shared_ptr<Connection>, std::string>> pending_msgs;
+    std::unique_lock<std::mutex> lock(broker_mutex_);
+    std::vector<Subscription> matches = registry_.match(subject);
+    for (size_t i = 0; i < matches.size(); i++) {
+        const Subscription& sub = matches[i];
+        auto it = connections_.find(sub.client_id);
+        if (it != connections_.end() && it->second->is_open()) {
+            std::string msg = ProtocolParser::format_msg(subject, sub.sid, payload, reply_to);
+            pending_msgs.emplace_back(it->second, std::move(msg));
+        }
+    }
+    lock.unlock();
+
+    for (size_t i = 0; i < pending_msgs.size(); i++) {
+        outbound_handler_(pending_msgs[i].first, std::move(pending_msgs[i].second));
+    }
+}
+
 void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd) {
     if (!conn || !outbound_handler_) {
         return;
@@ -57,21 +86,15 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
 
     switch (cmd.type) {
         case CommandType::PUB: {
-            std::vector<std::pair<std::shared_ptr<Connection>, std::string>> pending_msgs;
+            deliver_local(cmd.subject, cmd.payload, cmd.reply_to);
+
+            RouteMsgHandler route_handler;
             std::unique_lock<std::mutex> lock(broker_mutex_);
-            std::vector<Subscription> matches = registry_.match(cmd.subject);
-            for (size_t i = 0; i < matches.size(); i++) {
-                const Subscription& sub = matches[i];
-                auto it = connections_.find(sub.client_id);
-                if (it != connections_.end() && it->second->is_open()) {
-                    std::string msg = ProtocolParser::format_msg(cmd.subject, sub.sid, cmd.payload, cmd.reply_to);
-                    pending_msgs.emplace_back(it->second, std::move(msg));
-                }
-            }
+            route_handler = route_msg_handler_;
             lock.unlock();
 
-            for (size_t i = 0; i < pending_msgs.size(); i++) {
-                outbound_handler_(pending_msgs[i].first, std::move(pending_msgs[i].second));
+            if (route_handler) {
+                route_handler(cmd.subject, cmd.payload, cmd.reply_to);
             }
             break;
         }
