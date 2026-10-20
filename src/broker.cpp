@@ -103,7 +103,8 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
             std::unique_lock<std::mutex> lock(broker_mutex_);
             if (SubscriptionRegistry::is_valid_subject(cmd.subject)) {
                 registry_.add_subscription(cmd.subject, conn->id(), cmd.sid);
-                size_t count = ++local_subject_counts_[cmd.subject];
+                local_subject_counts_[cmd.subject]++;
+                size_t count = local_subject_counts_[cmd.subject];
                 if (count == 1) {
                     should_broadcast = true;
                 }

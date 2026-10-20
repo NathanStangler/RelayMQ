@@ -86,7 +86,7 @@ void Peer::record_activity() {
 }
 
 int Peer::increment_unanswered_pings() {
-    return ++unanswered_pings_;
+    return unanswered_pings_.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
 void Peer::reset_unanswered_pings() {

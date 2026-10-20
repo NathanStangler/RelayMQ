@@ -39,7 +39,7 @@ static std::vector<std::string> split_comma(const std::string& str) {
     return result;
 }
 
-int main(int argc, char* argv[]) {
+static bool parse_args(int argc, char* argv[], relaymq::ServerConfig& config) {
     uint16_t port = 9000;
     uint16_t cluster_port = 0;
     std::string cluster_name = "default";
@@ -52,19 +52,19 @@ int main(int argc, char* argv[]) {
         std::string arg = argv[i];
         if (arg == "--help") {
             print_usage();
-            return 0;
+            return false;
         } else if (arg == "--port" && i + 1 < argc) {
             i++;
             try {
                 int p = std::stoi(argv[i]);
                 if (p <= 0 || p > 65535) {
                     std::cerr << "Invalid port number: " << argv[i] << " (must be 1-65535)\n";
-                    return 1;
+                    return false;
                 }
                 port = static_cast<uint16_t>(p);
             } catch (const std::exception&) {
                 std::cerr << "Invalid port argument: " << argv[i] << "\n";
-                return 1;
+                return false;
             }
         } else if (arg == "--cluster-port" && i + 1 < argc) {
             i++;
@@ -72,12 +72,12 @@ int main(int argc, char* argv[]) {
                 int p = std::stoi(argv[i]);
                 if (p < 0 || p > 65535) {
                     std::cerr << "Invalid cluster-port number: " << argv[i] << "\n";
-                    return 1;
+                    return false;
                 }
                 cluster_port = static_cast<uint16_t>(p);
             } catch (const std::exception&) {
                 std::cerr << "Invalid cluster-port argument: " << argv[i] << "\n";
-                return 1;
+                return false;
             }
         } else if (arg == "--cluster-name" && i + 1 < argc) {
             i++;
@@ -94,7 +94,7 @@ int main(int argc, char* argv[]) {
                 heartbeat_ms = std::stoi(argv[i]);
             } catch (const std::exception&) {
                 std::cerr << "Invalid heartbeat argument: " << argv[i] << "\n";
-                return 1;
+                return false;
             }
         } else if (arg == "--max-missed" && i + 1 < argc) {
             i++;
@@ -102,31 +102,24 @@ int main(int argc, char* argv[]) {
                 max_missed = std::stoi(argv[i]);
             } catch (const std::exception&) {
                 std::cerr << "Invalid max-missed argument: " << argv[i] << "\n";
-                return 1;
+                return false;
             }
         } else {
             try {
                 int p = std::stoi(arg);
                 if (p <= 0 || p > 65535) {
                     std::cerr << "Invalid port number: " << arg << " (must be 1-65535)\n";
-                    return 1;
+                    return false;
                 }
                 port = static_cast<uint16_t>(p);
             } catch (const std::exception&) {
                 std::cerr << "Unknown option: " << arg << "\n";
                 print_usage();
-                return 1;
+                return false;
             }
         }
     }
 
-    sigset_t sigset;
-    sigemptyset(&sigset);
-    sigaddset(&sigset, SIGINT);
-    sigaddset(&sigset, SIGTERM);
-    pthread_sigmask(SIG_BLOCK, &sigset, nullptr);
-
-    relaymq::ServerConfig config;
     config.port = port;
     config.enable_clustering = (cluster_port > 0 || !peers.empty());
     config.cluster_port = cluster_port;
@@ -139,9 +132,24 @@ int main(int argc, char* argv[]) {
     config.heartbeat_interval_ms = heartbeat_ms;
     config.max_missed_heartbeats = max_missed;
 
+    return true;
+}
+
+int main(int argc, char* argv[]) {
+    relaymq::ServerConfig config;
+    if (!parse_args(argc, argv, config)) {
+        return 0;
+    }
+
+    sigset_t sigset;
+    sigemptyset(&sigset);
+    sigaddset(&sigset, SIGINT);
+    sigaddset(&sigset, SIGTERM);
+    pthread_sigmask(SIG_BLOCK, &sigset, nullptr);
+
     relaymq::Server server;
     if (!server.start(config)) {
-        std::cerr << "[RelayMQ Server] Failed to start server on port " << port << "\n";
+        std::cerr << "[RelayMQ Server] Failed to start server on port " << config.port << "\n";
         return 1;
     }
 
@@ -150,8 +158,12 @@ int main(int argc, char* argv[]) {
         std::cout << "[RelayMQ Server] Cluster: " << server.cluster_name()
                   << " | Node ID: " << server.node_id()
                   << " | Cluster port: " << server.cluster_port() << "\n";
-        if (!peers.empty()) {
-            std::cout << "[RelayMQ Server] Peers: " << argv[argc - 1] << "\n";
+        if (!config.peers.empty()) {
+            std::cout << "[RelayMQ Server] Peers:";
+            for (size_t i = 0; i < config.peers.size(); i++) {
+                std::cout << (i == 0 ? " " : ", ") << config.peers[i];
+            }
+            std::cout << "\n";
         }
     }
     std::cout << "[RelayMQ Server] Ready. Press Ctrl+C to shut down.\n";

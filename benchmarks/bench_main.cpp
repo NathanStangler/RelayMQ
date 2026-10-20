@@ -449,14 +449,12 @@ static void print_usage() {
               << "  --help                   Display this help message\n";
 }
 
-int main(int argc, char* argv[]) {
-    BenchConfig config;
-
+static bool parse_bench_args(int argc, char* argv[], BenchConfig& config) {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--help") {
             print_usage();
-            return 0;
+            return false;
         } else if (arg == "--server" && i + 1 < argc) {
             i++;
             std::string s = argv[i];
@@ -467,7 +465,7 @@ int main(int argc, char* argv[]) {
                     config.port = static_cast<uint16_t>(std::stoi(s.substr(colon + 1)));
                 } catch (const std::exception&) {
                     std::cerr << "Invalid port in --server argument: " << s << "\n";
-                    return 1;
+                    return false;
                 }
             } else {
                 config.host = s;
@@ -479,7 +477,7 @@ int main(int argc, char* argv[]) {
                 config.throughput_count = static_cast<size_t>(std::stoull(argv[i]));
             } catch (const std::exception&) {
                 std::cerr << "Invalid --throughput-count: " << argv[i] << "\n";
-                return 1;
+                return false;
             }
         } else if (arg == "--latency-count" && i + 1 < argc) {
             i++;
@@ -487,7 +485,7 @@ int main(int argc, char* argv[]) {
                 config.latency_count = static_cast<size_t>(std::stoull(argv[i]));
             } catch (const std::exception&) {
                 std::cerr << "Invalid --latency-count: " << argv[i] << "\n";
-                return 1;
+                return false;
             }
         } else if (arg == "--payload" && i + 1 < argc) {
             i++;
@@ -495,7 +493,7 @@ int main(int argc, char* argv[]) {
                 config.payload_size = static_cast<size_t>(std::stoull(argv[i]));
             } catch (const std::exception&) {
                 std::cerr << "Invalid --payload: " << argv[i] << "\n";
-                return 1;
+                return false;
             }
         } else if (arg == "--throughput-only") {
             config.run_throughput = true;
@@ -508,8 +506,16 @@ int main(int argc, char* argv[]) {
         } else {
             std::cerr << "Unknown option: " << arg << "\n";
             print_usage();
-            return 1;
+            return false;
         }
+    }
+    return true;
+}
+
+int main(int argc, char* argv[]) {
+    BenchConfig config;
+    if (!parse_bench_args(argc, argv, config)) {
+        return 0;
     }
 
     if (config.run_cluster) {

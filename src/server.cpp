@@ -442,28 +442,24 @@ void Server::writer_loop() {
     while (is_running_.load(std::memory_order_relaxed)) {
         OutboundMessage msg;
         if (outbound_queue_.pop(msg)) {
-            if (!msg.conn || !msg.conn->is_open()) {
-                continue;
-            }
-
-            int fd = msg.conn->socket_fd();
-            if (fd != current_fd || batch.size() + msg.data.size() > 65536) {
-                flush_batch(current_fd, batch);
-                current_fd = fd;
-            }
-
-            batch.append(msg.data);
-
-            while (outbound_queue_.pop(msg)) {
-                if (!msg.conn || !msg.conn->is_open()) {
-                    continue;
-                }
-                fd = msg.conn->socket_fd();
+            if (msg.conn && msg.conn->is_open()) {
+                int fd = msg.conn->socket_fd();
                 if (fd != current_fd || batch.size() + msg.data.size() > 65536) {
                     flush_batch(current_fd, batch);
                     current_fd = fd;
                 }
                 batch.append(msg.data);
+            }
+
+            while (outbound_queue_.pop(msg)) {
+                if (msg.conn && msg.conn->is_open()) {
+                    int fd = msg.conn->socket_fd();
+                    if (fd != current_fd || batch.size() + msg.data.size() > 65536) {
+                        flush_batch(current_fd, batch);
+                        current_fd = fd;
+                    }
+                    batch.append(msg.data);
+                }
             }
 
             flush_batch(current_fd, batch);
@@ -475,15 +471,14 @@ void Server::writer_loop() {
 
     OutboundMessage msg;
     while (outbound_queue_.pop(msg)) {
-        if (!msg.conn || !msg.conn->is_open()) {
-            continue;
+        if (msg.conn && msg.conn->is_open()) {
+            int fd = msg.conn->socket_fd();
+            if (fd != current_fd || batch.size() + msg.data.size() > 65536) {
+                flush_batch(current_fd, batch);
+                current_fd = fd;
+            }
+            batch.append(msg.data);
         }
-        int fd = msg.conn->socket_fd();
-        if (fd != current_fd || batch.size() + msg.data.size() > 65536) {
-            flush_batch(current_fd, batch);
-            current_fd = fd;
-        }
-        batch.append(msg.data);
     }
 
     flush_batch(current_fd, batch);

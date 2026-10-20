@@ -66,6 +66,160 @@ static void print_usage() {
               << "Defaults: host = 127.0.0.1, port = 9000\n";
 }
 
+static int handle_pub(int argc, char* argv[]) {
+    if (argc < 4) {
+        std::cerr << "Error: pub requires <subject> and <payload>\n";
+        std::cerr << "Usage: relay-cli pub <subject> <payload> [host] [port]\n";
+        return 1;
+    }
+
+    std::string subject = argv[2];
+    std::string payload = argv[3];
+    std::string host;
+    uint16_t port = 9000;
+    parse_endpoint(argc, argv, 4, host, port);
+
+    relaymq::Client client;
+    if (!client.connect(host, port)) {
+        std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port << "\n";
+        return 1;
+    }
+
+    if (client.publish(subject, payload)) {
+        std::cout << "[PUB] Successfully published to '" << subject << "': " << payload << "\n";
+    } else {
+        std::cerr << "Failed to publish message\n";
+        return 1;
+    }
+    return 0;
+}
+
+static int handle_sub(int argc, char* argv[]) {
+    if (argc < 3) {
+        std::cerr << "Error: sub requires <subject>\n";
+        std::cerr << "Usage: relay-cli sub <subject> [host] [port]\n";
+        return 1;
+    }
+
+    std::string subject = argv[2];
+    std::string host;
+    uint16_t port = 9000;
+    parse_endpoint(argc, argv, 3, host, port);
+
+    sigset_t sigset;
+    sigemptyset(&sigset);
+    sigaddset(&sigset, SIGINT);
+    sigaddset(&sigset, SIGTERM);
+    pthread_sigmask(SIG_BLOCK, &sigset, nullptr);
+
+    relaymq::Client client;
+    if (!client.connect(host, port)) {
+        std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port << "\n";
+        return 1;
+    }
+
+    std::mutex shutdown_mutex;
+    std::condition_variable shutdown_cv;
+    bool should_exit = false;
+
+    client.set_disconnect_callback([&]() {
+        std::unique_lock<std::mutex> lock(shutdown_mutex);
+        should_exit = true;
+        lock.unlock();
+        shutdown_cv.notify_one();
+    });
+
+    std::thread sig_thread([&sigset, &shutdown_mutex, &shutdown_cv, &should_exit]() {
+        int sig = 0;
+        sigwait(&sigset, &sig);
+        std::unique_lock<std::mutex> lock(shutdown_mutex);
+        should_exit = true;
+        lock.unlock();
+        shutdown_cv.notify_one();
+    });
+    sig_thread.detach();
+
+    std::string sid = client.subscribe(subject, [](const relaymq::Message& msg) {
+        std::cout << "[" << msg.subject << "] " << msg.payload << "\n";
+    });
+
+    if (sid.empty()) {
+        std::cerr << "Failed to subscribe to '" << subject << "'\n";
+        return 1;
+    }
+
+    std::cout << "[SUB] Subscribed to '" << subject << "' (sid=" << sid << ") on " << host << ":" << port << "\n";
+    std::cout << "[SUB] Waiting for messages (Ctrl+C to quit)...\n";
+
+    std::unique_lock<std::mutex> lock(shutdown_mutex);
+    shutdown_cv.wait(lock, [&should_exit]() {
+        return should_exit;
+    });
+    lock.unlock();
+
+    if (!client.is_connected()) {
+        std::cout << "\n[SUB] Server connection lost.\n";
+    } else {
+        std::cout << "\n[SUB] Unsubscribing and exiting...\n";
+        client.unsubscribe(sid);
+    }
+
+    client.disconnect();
+    return 0;
+}
+
+static int handle_req(int argc, char* argv[]) {
+    if (argc < 4) {
+        std::cerr << "Error: req requires <subject> and <payload>\n";
+        std::cerr << "Usage: relay-cli req <subject> <payload> [host] [port]\n";
+        return 1;
+    }
+
+    std::string subject = argv[2];
+    std::string payload = argv[3];
+    std::string host;
+    uint16_t port = 9000;
+    parse_endpoint(argc, argv, 4, host, port);
+
+    relaymq::Client client;
+    if (!client.connect(host, port)) {
+        std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port << "\n";
+        return 1;
+    }
+
+    std::optional<relaymq::Message> reply = client.request(subject, payload, 3000);
+    if (reply.has_value()) {
+        std::cout << "[REPLY] " << reply->payload << "\n";
+        client.disconnect();
+        return 0;
+    }
+
+    std::cerr << "Request timed out or no response\n";
+    client.disconnect();
+    return 1;
+}
+
+static int handle_ping(int argc, char* argv[]) {
+    std::string host;
+    uint16_t port = 9000;
+    parse_endpoint(argc, argv, 2, host, port);
+
+    relaymq::Client client;
+    if (!client.connect(host, port)) {
+        std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port << "\n";
+        return 1;
+    }
+
+    int64_t latency = client.ping();
+    if (latency >= 0) {
+        std::cout << "[PONG] Latency: " << (static_cast<double>(latency) / 1000.0) << " ms\n";
+    } else {
+        std::cerr << "Ping timed out or failed\n";
+        return 1;
+    }
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         print_usage();
@@ -75,157 +229,16 @@ int main(int argc, char* argv[]) {
     std::string mode = argv[1];
 
     if (mode == "pub") {
-        if (argc < 4) {
-            std::cerr << "Error: pub requires <subject> and <payload>\n";
-            std::cerr << "Usage: relay-cli pub <subject> <payload> [host] [port]\n";
-            return 1;
-        }
-
-        std::string subject = argv[2];
-        std::string payload = argv[3];
-        std::string host;
-        uint16_t port = 9000;
-        parse_endpoint(argc, argv, 4, host, port);
-
-        relaymq::Client client;
-        if (!client.connect(host, port)) {
-            std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port << "\n";
-            return 1;
-        }
-
-        if (client.publish(subject, payload)) {
-            std::cout << "[PUB] Successfully published to '" << subject << "': " << payload << "\n";
-        } else {
-            std::cerr << "Failed to publish message\n";
-            return 1;
-        }
-        return 0;
+        return handle_pub(argc, argv);
     }
-
     if (mode == "sub") {
-        if (argc < 3) {
-            std::cerr << "Error: sub requires <subject>\n";
-            std::cerr << "Usage: relay-cli sub <subject> [host] [port]\n";
-            return 1;
-        }
-
-        std::string subject = argv[2];
-        std::string host;
-        uint16_t port = 9000;
-        parse_endpoint(argc, argv, 3, host, port);
-
-        sigset_t sigset;
-        sigemptyset(&sigset);
-        sigaddset(&sigset, SIGINT);
-        sigaddset(&sigset, SIGTERM);
-        pthread_sigmask(SIG_BLOCK, &sigset, nullptr);
-
-        relaymq::Client client;
-        if (!client.connect(host, port)) {
-            std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port << "\n";
-            return 1;
-        }
-
-        std::mutex shutdown_mutex;
-        std::condition_variable shutdown_cv;
-        bool should_exit = false;
-
-        client.set_disconnect_callback([&]() {
-            std::unique_lock<std::mutex> lock(shutdown_mutex);
-            should_exit = true;
-            lock.unlock();
-            shutdown_cv.notify_one();
-        });
-
-        std::thread sig_thread([&sigset, &shutdown_mutex, &shutdown_cv, &should_exit]() {
-            int sig = 0;
-            sigwait(&sigset, &sig);
-            std::unique_lock<std::mutex> lock(shutdown_mutex);
-            should_exit = true;
-            lock.unlock();
-            shutdown_cv.notify_one();
-        });
-        sig_thread.detach();
-
-        std::string sid = client.subscribe(subject, [](const relaymq::Message& msg) {
-            std::cout << "[" << msg.subject << "] " << msg.payload << "\n";
-        });
-
-        if (sid.empty()) {
-            std::cerr << "Failed to subscribe to '" << subject << "'\n";
-            return 1;
-        }
-
-        std::cout << "[SUB] Subscribed to '" << subject << "' (sid=" << sid << ") on " << host << ":" << port << "\n";
-        std::cout << "[SUB] Waiting for messages (Ctrl+C to quit)...\n";
-
-        std::unique_lock<std::mutex> lock(shutdown_mutex);
-        shutdown_cv.wait(lock, [&should_exit]() {
-            return should_exit;
-        });
-        lock.unlock();
-
-        if (!client.is_connected()) {
-            std::cout << "\n[SUB] Server connection lost.\n";
-        } else {
-            std::cout << "\n[SUB] Unsubscribing and exiting...\n";
-            client.unsubscribe(sid);
-        }
-
-        client.disconnect();
-        return 0;
+        return handle_sub(argc, argv);
     }
-
     if (mode == "req") {
-        if (argc < 4) {
-            std::cerr << "Error: req requires <subject> and <payload>\n";
-            std::cerr << "Usage: relay-cli req <subject> <payload> [host] [port]\n";
-            return 1;
-        }
-
-        std::string subject = argv[2];
-        std::string payload = argv[3];
-        std::string host;
-        uint16_t port = 9000;
-        parse_endpoint(argc, argv, 4, host, port);
-
-        relaymq::Client client;
-        if (!client.connect(host, port)) {
-            std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port << "\n";
-            return 1;
-        }
-
-        std::optional<relaymq::Message> reply = client.request(subject, payload, 3000);
-        if (reply.has_value()) {
-            std::cout << "[REPLY] " << reply->payload << "\n";
-            client.disconnect();
-            return 0;
-        } else {
-            std::cerr << "Request timed out or no response\n";
-            client.disconnect();
-            return 1;
-        }
+        return handle_req(argc, argv);
     }
-
     if (mode == "ping") {
-        std::string host;
-        uint16_t port = 9000;
-        parse_endpoint(argc, argv, 2, host, port);
-
-        relaymq::Client client;
-        if (!client.connect(host, port)) {
-            std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port << "\n";
-            return 1;
-        }
-
-        int64_t latency = client.ping();
-        if (latency >= 0) {
-            std::cout << "[PONG] Latency: " << (static_cast<double>(latency) / 1000.0) << " ms\n";
-        } else {
-            std::cerr << "Ping timed out or failed\n";
-            return 1;
-        }
-        return 0;
+        return handle_ping(argc, argv);
     }
 
     std::cerr << "Unknown command: " << mode << "\n\n";

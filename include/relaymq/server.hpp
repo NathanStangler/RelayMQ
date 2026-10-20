@@ -34,6 +34,9 @@ public:
     Server();
     ~Server();
 
+    Server(const Server&) = delete;
+    Server& operator=(const Server&) = delete;
+
     bool start(const ServerConfig& config = {});
     void stop();
     bool is_running() const;
