@@ -326,7 +326,9 @@ int main(int argc, char* argv[]) {
 
     if (config.port == 0) {
         server = std::make_unique<relaymq::Server>();
-        if (!server->start(0)) {
+        relaymq::ServerConfig server_config;
+        server_config.port = 0;
+        if (!server->start(server_config)) {
             std::cerr << "Failed to start broker.\n";
             return 1;
         }

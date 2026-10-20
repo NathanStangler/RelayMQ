@@ -72,7 +72,9 @@ int main(int argc, char* argv[]) {
     pthread_sigmask(SIG_BLOCK, &sigset, nullptr);
 
     relaymq::Server server;
-    if (!server.start(port)) {
+    relaymq::ServerConfig config;
+    config.port = port;
+    if (!server.start(config)) {
         std::cerr << "[RelayMQ Server] Failed to bind to port " << port << "\n";
         return 1;
     }

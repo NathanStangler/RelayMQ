@@ -8,7 +8,9 @@
 class ClientTest : public testing::Test {
 protected:
     void SetUp() override {
-        ASSERT_TRUE(server_.start(0));
+        relaymq::ServerConfig config;
+        config.port = 0;
+        ASSERT_TRUE(server_.start(config));
         port_ = server_.port();
         ASSERT_GT(port_, 0);
     }
