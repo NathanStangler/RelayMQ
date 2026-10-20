@@ -2,6 +2,55 @@
 
 namespace relaymq {
 
+static std::vector<std::string> split_comma(std::string_view str) {
+    std::vector<std::string> result;
+    size_t start = 0;
+    size_t end = str.find(',');
+    while (end != std::string_view::npos) {
+        if (end > start) {
+            result.emplace_back(str.substr(start, end - start));
+        }
+        start = end + 1;
+        end = str.find(',', start);
+    }
+    if (start < str.size()) {
+        result.emplace_back(str.substr(start));
+    }
+    return result;
+}
+
+bool TokenRule::parse(std::string_view rule_str, TokenRule& rule) {
+    size_t first_colon = rule_str.find(':');
+    if (first_colon == std::string_view::npos) {
+        return false;
+    }
+    std::string_view token_part = rule_str.substr(0, first_colon);
+    if (token_part.empty()) {
+        return false;
+    }
+
+    size_t second_colon = rule_str.find(':', first_colon + 1);
+    if (second_colon == std::string_view::npos) {
+        return false;
+    }
+
+    std::string_view pub_part = rule_str.substr(first_colon + 1, second_colon - (first_colon + 1));
+    std::string_view sub_part = rule_str.substr(second_colon + 1);
+
+    rule.token = std::string(token_part);
+    rule.allow_publish.clear();
+    rule.allow_subscribe.clear();
+
+    if (!pub_part.empty() && pub_part != "none") {
+        rule.allow_publish = split_comma(pub_part);
+    }
+    if (!sub_part.empty() && sub_part != "none") {
+        rule.allow_subscribe = split_comma(sub_part);
+    }
+
+    return true;
+}
+
 SubjectAcl::SubjectAcl(bool unrestricted) : unrestricted_(unrestricted) {}
 
 bool SubjectAcl::allow_publish(const std::string& pattern) {

@@ -7,6 +7,14 @@
 
 namespace relaymq {
 
+struct TokenRule {
+    std::string token;
+    std::vector<std::string> allow_publish;
+    std::vector<std::string> allow_subscribe;
+
+    static bool parse(std::string_view rule_str, TokenRule& rule);
+};
+
 class SubjectAcl {
 public:
     SubjectAcl(bool unrestricted = true);

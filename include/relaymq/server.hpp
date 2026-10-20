@@ -1,8 +1,9 @@
 #pragma once
 
 #include "relaymq/broker.hpp"
-#include "relaymq/spsc_queue.hpp"
 #include "relaymq/cluster.hpp"
+#include "relaymq/outbound_writer.hpp"
+#include "relaymq/endpoint.hpp"
 #include <atomic>
 #include <thread>
 #include <unordered_map>
@@ -12,11 +13,6 @@
 #include <cstdint>
 
 namespace relaymq {
-
-struct OutboundMessage {
-    std::shared_ptr<Connection> conn;
-    std::string data;
-};
 
 struct ServerConfig {
     uint16_t port = 9000;
@@ -71,18 +67,15 @@ private:
     std::atomic<bool> is_running_;
     Broker broker_;
     Cluster cluster_;
+    OutboundWriter writer_;
     ServerConfig config_;
     std::thread event_thread_;
-    std::thread writer_thread_;
     std::thread heartbeat_thread_;
-    SpscQueue<OutboundMessage, 65536> outbound_queue_;
     std::unordered_map<int, std::shared_ptr<Connection>> clients_;
     std::atomic<uint64_t> next_client_id_;
 
     void event_loop();
-    void writer_loop();
     void heartbeat_loop();
-    void flush_batch(int fd, std::string& batch);
     void accept_connection();
     void handle_client(int client_fd, uint32_t events);
     void remove_client(int client_fd);

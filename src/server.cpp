@@ -80,11 +80,10 @@ bool Server::start(const ServerConfig& config) {
         epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, cluster_server_fd_, &cluster_ev);
     }
 
+    writer_.start();
+
     broker_.set_outbound_handler([this](std::shared_ptr<Connection> conn, std::string data) {
-        OutboundMessage msg{std::move(conn), std::move(data)};
-        while (is_running_.load(std::memory_order_relaxed) && !outbound_queue_.push(std::move(msg))) {
-            std::this_thread::yield();
-        }
+        writer_.enqueue(std::move(conn), std::move(data));
     });
 
     broker_.set_cluster_broadcast_handler([this](std::string_view data) {
@@ -110,7 +109,6 @@ bool Server::start(const ServerConfig& config) {
     });
 
     config_ = config;
-    writer_thread_ = std::thread(&Server::writer_loop, this);
     event_thread_ = std::thread(&Server::event_loop, this);
 
     if (config_.enable_clustering && config_.heartbeat_interval_ms > 0) {
@@ -118,12 +116,9 @@ bool Server::start(const ServerConfig& config) {
     }
 
     for (size_t i = 0; i < config.peers.size(); i++) {
-        const std::string& peer_str = config.peers[i];
-        size_t colon = peer_str.find(':');
-        if (colon != std::string::npos) {
-            std::string host = peer_str.substr(0, colon);
-            uint16_t port = static_cast<uint16_t>(std::stoi(peer_str.substr(colon + 1)));
-            connect_to_peer(host, port);
+        Endpoint endpoint;
+        if (Endpoint::parse(config.peers[i], endpoint)) {
+            connect_to_peer(endpoint.host, endpoint.port);
         }
     }
 
@@ -146,9 +141,7 @@ void Server::stop() {
         event_thread_.join();
     }
 
-    if (writer_thread_.joinable()) {
-        writer_thread_.join();
-    }
+    writer_.stop();
 
     if (heartbeat_thread_.joinable()) {
         heartbeat_thread_.join();
@@ -453,64 +446,6 @@ size_t Server::local_subject_count(const std::string& subject) {
     return broker_.local_subject_count(subject);
 }
 
-void Server::flush_batch(int fd, std::string& batch) {
-    if (fd < 0 || batch.empty()) {
-        return;
-    }
-    net::send_all(fd, batch, 1000);
-    batch.clear();
-}
-
-void Server::writer_loop() {
-    std::string batch;
-    batch.reserve(65536);
-    int current_fd = -1;
-
-    while (is_running_.load(std::memory_order_relaxed)) {
-        OutboundMessage msg;
-        if (outbound_queue_.pop(msg)) {
-            if (msg.conn && msg.conn->is_open()) {
-                int fd = msg.conn->socket_fd();
-                if (fd != current_fd || batch.size() + msg.data.size() > 65536) {
-                    flush_batch(current_fd, batch);
-                    current_fd = fd;
-                }
-                batch.append(msg.data);
-            }
-
-            while (outbound_queue_.pop(msg)) {
-                if (msg.conn && msg.conn->is_open()) {
-                    int fd = msg.conn->socket_fd();
-                    if (fd != current_fd || batch.size() + msg.data.size() > 65536) {
-                        flush_batch(current_fd, batch);
-                        current_fd = fd;
-                    }
-                    batch.append(msg.data);
-                }
-            }
-
-            flush_batch(current_fd, batch);
-            current_fd = -1;
-        } else {
-            std::this_thread::yield();
-        }
-    }
-
-    OutboundMessage msg;
-    while (outbound_queue_.pop(msg)) {
-        if (msg.conn && msg.conn->is_open()) {
-            int fd = msg.conn->socket_fd();
-            if (fd != current_fd || batch.size() + msg.data.size() > 65536) {
-                flush_batch(current_fd, batch);
-                current_fd = fd;
-            }
-            batch.append(msg.data);
-        }
-    }
-
-    flush_batch(current_fd, batch);
-}
-
 void Server::heartbeat_loop() {
     int interval_ms = config_.heartbeat_interval_ms;
     int max_missed = config_.max_missed_heartbeats;
@@ -546,23 +481,19 @@ void Server::heartbeat_loop() {
         }
 
         for (size_t i = 0; i < config_.peers.size(); i++) {
-            const std::string& peer_str = config_.peers[i];
-            size_t colon = peer_str.find(':');
-            if (colon != std::string::npos) {
-                std::string host = peer_str.substr(0, colon);
-                uint16_t port = static_cast<uint16_t>(std::stoi(peer_str.substr(colon + 1)));
-
+            Endpoint endpoint;
+            if (Endpoint::parse(config_.peers[i], endpoint)) {
                 bool already_connected = false;
                 std::vector<std::shared_ptr<Peer>> active = cluster_.all_peers();
                 for (size_t j = 0; j < active.size(); j++) {
-                    if (active[j]->is_connected() && active[j]->endpoint() == peer_str) {
+                    if (active[j]->is_connected() && active[j]->endpoint() == endpoint.to_string()) {
                         already_connected = true;
                         break;
                     }
                 }
 
                 if (!already_connected) {
-                    connect_to_peer(host, port);
+                    connect_to_peer(endpoint.host, endpoint.port);
                 }
             }
         }

@@ -12,12 +12,6 @@
 
 namespace relaymq {
 
-struct TokenRule {
-    std::string token;
-    std::vector<std::string> allow_publish;
-    std::vector<std::string> allow_subscribe;
-};
-
 class Broker {
 public:
     using OutboundHandler = std::function<void(std::shared_ptr<Connection>, std::string)>;

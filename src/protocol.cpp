@@ -6,9 +6,7 @@
 
 namespace relaymq {
 
-namespace {
-
-bool equals_ignore_case(std::string_view a, std::string_view b) {
+static bool equals_ignore_case(std::string_view a, std::string_view b) {
     if (a.size() != b.size()) {
         return false;
     }
@@ -20,14 +18,12 @@ bool equals_ignore_case(std::string_view a, std::string_view b) {
     return true;
 }
 
-bool parse_uint64(std::string_view sv, size_t& value) {
+static bool parse_uint64(std::string_view sv, size_t& value) {
     if (sv.empty()) {
         return false;
     }
     std::from_chars_result result = std::from_chars(sv.data(), sv.data() + sv.size(), value);
     return result.ec == std::errc() && result.ptr == sv.data() + sv.size();
-}
-
 }
 
 std::string to_string(CommandType type) {
@@ -373,7 +369,7 @@ bool ProtocolParser::next_command(Command& cmd) {
     }
 }
 
-std::string ProtocolParser::format_pub(std::string_view subject, std::string_view payload, std::string_view reply_to) {
+std::string ProtocolFormatter::format_pub(std::string_view subject, std::string_view payload, std::string_view reply_to) {
     std::string out;
     std::string size_str = std::to_string(payload.size());
     size_t total_len = subject.size() + size_str.size() + payload.size() + 9;
@@ -396,7 +392,7 @@ std::string ProtocolParser::format_pub(std::string_view subject, std::string_vie
     return out;
 }
 
-std::string ProtocolParser::format_sub(std::string_view subject, std::string_view sid) {
+std::string ProtocolFormatter::format_sub(std::string_view subject, std::string_view sid) {
     std::string out;
     out.reserve(subject.size() + sid.size() + 7);
     out.append("SUB ");
@@ -407,7 +403,7 @@ std::string ProtocolParser::format_sub(std::string_view subject, std::string_vie
     return out;
 }
 
-std::string ProtocolParser::format_unsub(std::string_view sid) {
+std::string ProtocolFormatter::format_unsub(std::string_view sid) {
     std::string out;
     out.reserve(sid.size() + 8);
     out.append("UNSUB ");
@@ -416,7 +412,7 @@ std::string ProtocolParser::format_unsub(std::string_view sid) {
     return out;
 }
 
-std::string ProtocolParser::format_msg(std::string_view subject, std::string_view sid, std::string_view payload, std::string_view reply_to) {
+std::string ProtocolFormatter::format_msg(std::string_view subject, std::string_view sid, std::string_view payload, std::string_view reply_to) {
     std::string out;
     std::string size_str = std::to_string(payload.size());
     size_t total_len = subject.size() + sid.size() + size_str.size() + payload.size() + 10;
@@ -441,19 +437,19 @@ std::string ProtocolParser::format_msg(std::string_view subject, std::string_vie
     return out;
 }
 
-std::string ProtocolParser::format_ping() {
+std::string ProtocolFormatter::format_ping() {
     return "PING\r\n";
 }
 
-std::string ProtocolParser::format_pong() {
+std::string ProtocolFormatter::format_pong() {
     return "PONG\r\n";
 }
 
-std::string ProtocolParser::format_ok() {
+std::string ProtocolFormatter::format_ok() {
     return "OK\r\n";
 }
 
-std::string ProtocolParser::format_err(std::string_view reason) {
+std::string ProtocolFormatter::format_err(std::string_view reason) {
     std::string out;
     out.reserve(reason.size() + 6);
     out.append("ERR ");
@@ -462,7 +458,7 @@ std::string ProtocolParser::format_err(std::string_view reason) {
     return out;
 }
 
-std::string ProtocolParser::format_route_connect(std::string_view cluster_name, std::string_view node_id, std::string_view auth_token) {
+std::string ProtocolFormatter::format_route_connect(std::string_view cluster_name, std::string_view node_id, std::string_view auth_token) {
     std::string out;
     size_t total_len = cluster_name.size() + node_id.size() + 17;
     if (!auth_token.empty()) {
@@ -481,7 +477,7 @@ std::string ProtocolParser::format_route_connect(std::string_view cluster_name, 
     return out;
 }
 
-std::string ProtocolParser::format_auth(std::string_view token) {
+std::string ProtocolFormatter::format_auth(std::string_view token) {
     std::string out;
     out.reserve(token.size() + 7);
     out.append("AUTH ");
@@ -490,7 +486,7 @@ std::string ProtocolParser::format_auth(std::string_view token) {
     return out;
 }
 
-std::string ProtocolParser::format_rsub(std::string_view subject) {
+std::string ProtocolFormatter::format_rsub(std::string_view subject) {
     std::string out;
     out.reserve(subject.size() + 7);
     out.append("RSUB ");
@@ -499,7 +495,7 @@ std::string ProtocolParser::format_rsub(std::string_view subject) {
     return out;
 }
 
-std::string ProtocolParser::format_runsub(std::string_view subject) {
+std::string ProtocolFormatter::format_runsub(std::string_view subject) {
     std::string out;
     out.reserve(subject.size() + 9);
     out.append("RUNSUB ");
@@ -508,7 +504,7 @@ std::string ProtocolParser::format_runsub(std::string_view subject) {
     return out;
 }
 
-std::string ProtocolParser::format_rmsg(std::string_view subject, std::string_view payload, std::string_view reply_to) {
+std::string ProtocolFormatter::format_rmsg(std::string_view subject, std::string_view payload, std::string_view reply_to) {
     std::string out;
     std::string size_str = std::to_string(payload.size());
     size_t total_len = subject.size() + size_str.size() + payload.size() + 10;
@@ -531,11 +527,11 @@ std::string ProtocolParser::format_rmsg(std::string_view subject, std::string_vi
     return out;
 }
 
-std::string ProtocolParser::format_rping() {
+std::string ProtocolFormatter::format_rping() {
     return "RPING\r\n";
 }
 
-std::string ProtocolParser::format_rpong() {
+std::string ProtocolFormatter::format_rpong() {
     return "RPONG\r\n";
 }
 

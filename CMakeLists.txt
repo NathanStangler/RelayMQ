@@ -25,9 +25,11 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 add_library(relaymq_core
     src/net.cpp
+    src/endpoint.cpp
     src/protocol.cpp
     src/subscription_registry.cpp
     src/connection.cpp
+    src/outbound_writer.cpp
     src/broker.cpp
     src/server.cpp
     src/client.cpp
@@ -77,10 +79,12 @@ set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 add_executable(relaymq_tests
+    tests/test_endpoint.cpp
     tests/test_protocol.cpp
     tests/test_subscription_registry.cpp
     tests/test_server.cpp
     tests/test_spsc_queue.cpp
+    tests/test_outbound_writer.cpp
     tests/test_client.cpp
     tests/test_cluster.cpp
     tests/test_auth.cpp

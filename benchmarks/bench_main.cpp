@@ -1,5 +1,6 @@
 #include "relaymq/server.hpp"
 #include "relaymq/client.hpp"
+#include "relaymq/endpoint.hpp"
 
 #include <iostream>
 #include <iomanip>
@@ -459,20 +460,13 @@ static bool parse_bench_args(int argc, char* argv[], BenchConfig& config) {
             return false;
         } else if (arg == "--server" && i + 1 < argc) {
             i++;
-            std::string s = argv[i];
-            size_t colon = s.find(':');
-            if (colon != std::string::npos) {
-                config.host = s.substr(0, colon);
-                try {
-                    config.port = static_cast<uint16_t>(std::stoi(s.substr(colon + 1)));
-                } catch (const std::exception&) {
-                    std::cerr << "Invalid port in --server argument: " << s << "\n";
-                    return false;
-                }
-            } else {
-                config.host = s;
-                config.port = 9000;
+            relaymq::Endpoint endpoint;
+            if (!relaymq::Endpoint::parse(argv[i], endpoint)) {
+                std::cerr << "Invalid server address: " << argv[i] << "\n";
+                return false;
             }
+            config.host = endpoint.host;
+            config.port = endpoint.port;
         } else if (arg == "--throughput-count" && i + 1 < argc) {
             i++;
             try {

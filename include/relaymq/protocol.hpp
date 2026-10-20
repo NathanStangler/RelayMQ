@@ -39,16 +39,8 @@ struct Command {
     std::string auth_token;
 };
 
-class ProtocolParser {
+class ProtocolFormatter {
 public:
-    ProtocolParser() = default;
-
-    void append(const std::string& data);
-    void append(const char* data, size_t length);
-    bool next_command(Command& cmd);
-    void clear();
-    size_t buffered_bytes() const;
-
     static std::string format_pub(std::string_view subject, std::string_view payload, std::string_view reply_to = "");
     static std::string format_sub(std::string_view subject, std::string_view sid);
     static std::string format_unsub(std::string_view sid);
@@ -64,6 +56,17 @@ public:
     static std::string format_rping();
     static std::string format_rpong();
     static std::string format_auth(std::string_view token);
+};
+
+class ProtocolParser : public ProtocolFormatter {
+public:
+    ProtocolParser() = default;
+
+    void append(const std::string& data);
+    void append(const char* data, size_t length);
+    bool next_command(Command& cmd);
+    void clear();
+    size_t buffered_bytes() const;
 
 private:
     std::string buffer_;

@@ -1,4 +1,6 @@
 #include "relaymq/server.hpp"
+#include "relaymq/endpoint.hpp"
+#include "relaymq/acl.hpp"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -42,30 +44,6 @@ static std::vector<std::string> split_comma(const std::string& str) {
     return result;
 }
 
-static bool parse_token_rule(const std::string& arg, relaymq::TokenRule& rule) {
-    size_t first_colon = arg.find(':');
-    if (first_colon == std::string::npos) {
-        return false;
-    }
-    rule.token = arg.substr(0, first_colon);
-
-    size_t second_colon = arg.find(':', first_colon + 1);
-    if (second_colon == std::string::npos) {
-        return false;
-    }
-
-    std::string pub_str = arg.substr(first_colon + 1, second_colon - (first_colon + 1));
-    std::string sub_str = arg.substr(second_colon + 1);
-
-    if (!pub_str.empty() && pub_str != "none") {
-        rule.allow_publish = split_comma(pub_str);
-    }
-    if (!sub_str.empty() && sub_str != "none") {
-        rule.allow_subscribe = split_comma(sub_str);
-    }
-    return !rule.token.empty();
-}
-
 static bool parse_args(int argc, char* argv[], relaymq::ServerConfig& config) {
     uint16_t port = 9000;
     uint16_t cluster_port = 0;
@@ -82,7 +60,8 @@ static bool parse_args(int argc, char* argv[], relaymq::ServerConfig& config) {
         if (arg == "--help") {
             print_usage();
             return false;
-        } else if (arg == "--port" && i + 1 < argc) {
+        }
+        if (arg == "--port" && i + 1 < argc) {
             i++;
             try {
                 int p = std::stoi(argv[i]);
@@ -142,7 +121,7 @@ static bool parse_args(int argc, char* argv[], relaymq::ServerConfig& config) {
         } else if (arg == "--token-rule" && i + 1 < argc) {
             i++;
             relaymq::TokenRule rule;
-            if (parse_token_rule(argv[i], rule)) {
+            if (relaymq::TokenRule::parse(argv[i], rule)) {
                 config.token_rules.push_back(std::move(rule));
             } else {
                 std::cerr << "Invalid --token-rule format: " << argv[i] << " (expected <token>:<pub1,pub2,...>:<sub1,sub2,...>)\n";
