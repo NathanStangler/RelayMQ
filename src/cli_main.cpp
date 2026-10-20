@@ -61,6 +61,7 @@ static void print_usage() {
               << "Usage:\n"
               << "  relay-cli pub <subject> <payload> [host] [port]   Publish a message\n"
               << "  relay-cli sub <subject> [host] [port]             Subscribe and listen for messages\n"
+              << "  relay-cli req <subject> <payload> [host] [port]   Request-reply\n"
               << "  relay-cli ping [host] [port]                      Ping the broker and measure latency\n\n"
               << "Defaults: host = 127.0.0.1, port = 9000\n";
 }
@@ -173,6 +174,37 @@ int main(int argc, char* argv[]) {
 
         client.disconnect();
         return 0;
+    }
+
+    if (mode == "req") {
+        if (argc < 4) {
+            std::cerr << "Error: req requires <subject> and <payload>\n";
+            std::cerr << "Usage: relay-cli req <subject> <payload> [host] [port]\n";
+            return 1;
+        }
+
+        std::string subject = argv[2];
+        std::string payload = argv[3];
+        std::string host;
+        uint16_t port = 9000;
+        parse_endpoint(argc, argv, 4, host, port);
+
+        relaymq::Client client;
+        if (!client.connect(host, port)) {
+            std::cerr << "Failed to connect to RelayMQ server at " << host << ":" << port << "\n";
+            return 1;
+        }
+
+        std::optional<relaymq::Message> reply = client.request(subject, payload, 3000);
+        if (reply.has_value()) {
+            std::cout << "[REPLY] " << reply->payload << "\n";
+            client.disconnect();
+            return 0;
+        } else {
+            std::cerr << "Request timed out or no response\n";
+            client.disconnect();
+            return 1;
+        }
     }
 
     if (mode == "ping") {

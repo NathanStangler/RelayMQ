@@ -1,6 +1,6 @@
 # RelayMQ
 
-RelayMQ is a lightweight, low-latency publish-subscribe messaging broker and client library written in C++.
+RelayMQ is a lightweight, low-latency distributed publish-subscribe messaging broker and client library written in C++.
 
 ---
 
@@ -22,20 +22,31 @@ ctest --test-dir build --output-on-failure
 ### Run Benchmarks
 
 ```bash
+# Single-node benchmark
 ./build/relay-bench --throughput-count 100000 --payload 64
+
+# Cluster benchmark (2 nodes)
+./build/relay-bench --cluster --throughput-count 100000 --latency-count 10000 --payload 64
 ```
 
 ### Run Server & CLI
 
 ```bash
-# Terminal 1: Start broker
+# Standalone broker
 ./build/relay-server --port 9000
 
-# Terminal 2: Subscribe
+# Clustered brokers
+./build/relay-server --port 9001 --cluster-port 9101 --node-id node_1
+./build/relay-server --port 9002 --cluster-port 9102 --node-id node_2 --peers 127.0.0.1:9101
+
+# Subscribe
 ./build/relay-cli sub "service.*" 127.0.0.1 9000
 
-# Terminal 3: Publish
+# Publish
 ./build/relay-cli pub "service.message" "value=50" 127.0.0.1 9000
+
+# Request-Reply RPC
+./build/relay-cli req "service.echo" "ping" 127.0.0.1 9000
 ```
 
 ---
