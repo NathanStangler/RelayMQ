@@ -32,6 +32,7 @@ public:
 
     static std::vector<std::string_view> tokenize(std::string_view subject);
     static bool is_valid_subject(std::string_view subject);
+    static bool is_valid_publish_subject(std::string_view subject);
 
 private:
     struct Node {

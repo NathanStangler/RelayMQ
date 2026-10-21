@@ -6,6 +6,8 @@
 #include <memory>
 #include <thread>
 #include <atomic>
+#include <mutex>
+#include <condition_variable>
 
 namespace relaymq {
 
@@ -29,6 +31,9 @@ public:
 
 private:
     SpscQueue<OutboundMessage, 65536> queue_;
+    std::mutex enqueue_mutex_;
+    std::mutex cv_mutex_;
+    std::condition_variable cv_;
     std::thread writer_thread_;
     std::atomic<bool> is_running_{false};
 

@@ -39,6 +39,12 @@ bool SubscriptionRegistry::is_valid_subject(std::string_view subject) {
         return false;
     }
 
+    for (char c : subject) {
+        if (static_cast<unsigned char>(c) <= 32 || static_cast<unsigned char>(c) == 127) {
+            return false;
+        }
+    }
+
     std::vector<std::string_view> tokens = tokenize(subject);
     if (tokens.empty()) {
         return false;
@@ -61,6 +67,16 @@ bool SubscriptionRegistry::is_valid_subject(std::string_view subject) {
         }
     }
 
+    return true;
+}
+
+bool SubscriptionRegistry::is_valid_publish_subject(std::string_view subject) {
+    if (!is_valid_subject(subject)) {
+        return false;
+    }
+    if (subject.find('*') != std::string_view::npos || subject.find('>') != std::string_view::npos) {
+        return false;
+    }
     return true;
 }
 

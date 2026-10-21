@@ -26,7 +26,8 @@ void Broker::set_auth_token(const std::string& token) {
     lock.unlock();
 }
 
-const std::string& Broker::auth_token() const {
+std::string Broker::auth_token() {
+    std::unique_lock<std::mutex> lock(broker_mutex_);
     return auth_token_;
 }
 
@@ -196,6 +197,14 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
 
     switch (cmd.type) {
         case CommandType::PUB: {
+            if (!SubscriptionRegistry::is_valid_publish_subject(cmd.subject)) {
+                outbound_handler_(conn, ProtocolParser::format_err("Invalid subject"), false);
+                break;
+            }
+            if (!cmd.reply_to.empty() && !SubscriptionRegistry::is_valid_publish_subject(cmd.reply_to)) {
+                outbound_handler_(conn, ProtocolParser::format_err("Invalid reply-to subject"), false);
+                break;
+            }
             if (!conn->acl().can_publish(cmd.subject)) {
                 outbound_handler_(conn, ProtocolParser::format_err("Permission Violation: Publish to " + cmd.subject + " denied"), false);
                 break;
@@ -214,18 +223,33 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
             break;
         }
         case CommandType::SUB: {
-            if (!conn->acl().can_subscribe(cmd.subject)) {
-                outbound_handler_(conn, ProtocolParser::format_err("Permission Violation: Subscribe to " + cmd.subject + " denied"), false);
-                break;
-            }
-
             if (!SubscriptionRegistry::is_valid_subject(cmd.subject)) {
                 outbound_handler_(conn, ProtocolParser::format_err("Invalid subject"), false);
                 break;
             }
 
+            if (!conn->acl().can_subscribe(cmd.subject)) {
+                outbound_handler_(conn, ProtocolParser::format_err("Permission Violation: Subscribe to " + cmd.subject + " denied"), false);
+                break;
+            }
+
             bool should_broadcast = false;
+            std::string runsub_subject;
             std::unique_lock<std::mutex> lock(broker_mutex_);
+            std::string old_subject;
+            if (registry_.remove_subscription(conn->id(), cmd.sid, &old_subject)) {
+                auto it = local_subject_counts_.find(old_subject);
+                if (it != local_subject_counts_.end()) {
+                    if (it->second > 0) {
+                        it->second--;
+                    }
+                    if (it->second == 0) {
+                        local_subject_counts_.erase(it);
+                        runsub_subject = old_subject;
+                    }
+                }
+            }
+
             registry_.add_subscription(cmd.subject, conn->id(), cmd.sid);
             local_subject_counts_[cmd.subject]++;
             size_t count = local_subject_counts_[cmd.subject];
@@ -234,6 +258,9 @@ void Broker::handle_command(std::shared_ptr<Connection> conn, const Command& cmd
             }
             lock.unlock();
 
+            if (!runsub_subject.empty() && cluster_broadcast_handler_) {
+                cluster_broadcast_handler_(ProtocolParser::format_runsub(runsub_subject));
+            }
             if (should_broadcast && cluster_broadcast_handler_) {
                 cluster_broadcast_handler_(ProtocolParser::format_rsub(cmd.subject));
             }

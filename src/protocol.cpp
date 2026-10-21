@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <charconv>
 
 namespace relaymq {
@@ -140,6 +141,23 @@ bool ProtocolParser::parse_payload_command(CommandType type, const std::vector<s
         }
     }
 
+    constexpr size_t MAX_PAYLOAD_SIZE = 64 * 1024 * 1024;
+    if (payload_len > MAX_PAYLOAD_SIZE) {
+        buffer_.erase(0, line_end + 2);
+        cmd = Command{};
+        cmd.type = CommandType::ERR;
+        cmd.error_message = "Payload size exceeds maximum allowed size";
+        return true;
+    }
+
+    if (payload_len > SIZE_MAX - (line_end + 4)) {
+        buffer_.erase(0, line_end + 2);
+        cmd = Command{};
+        cmd.type = CommandType::ERR;
+        cmd.error_message = "Invalid byte length in " + action_name + " command";
+        return true;
+    }
+
     size_t total_required = line_end + payload_len + 4;
     if (buffer_.size() < total_required) {
         return false;
@@ -223,6 +241,23 @@ bool ProtocolParser::parse_msg(const std::vector<std::string_view>& tokens, size
             cmd.error_message = "Invalid byte length in MSG command";
             return true;
         }
+    }
+
+    constexpr size_t MAX_PAYLOAD_SIZE = 64 * 1024 * 1024;
+    if (payload_len > MAX_PAYLOAD_SIZE) {
+        buffer_.erase(0, line_end + 2);
+        cmd = Command{};
+        cmd.type = CommandType::ERR;
+        cmd.error_message = "Payload size exceeds maximum allowed size";
+        return true;
+    }
+
+    if (payload_len > SIZE_MAX - (line_end + 4)) {
+        buffer_.erase(0, line_end + 2);
+        cmd = Command{};
+        cmd.type = CommandType::ERR;
+        cmd.error_message = "Invalid byte length in MSG command";
+        return true;
     }
 
     size_t total_required = line_end + payload_len + 4;

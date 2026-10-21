@@ -25,7 +25,7 @@ public:
     void set_cluster_broadcast_handler(ClusterBroadcastHandler handler);
     void set_route_msg_handler(RouteMsgHandler handler);
     void set_auth_token(const std::string& token);
-    const std::string& auth_token() const;
+    std::string auth_token();
     void add_token_rule(const TokenRule& rule);
     void clear_token_rules();
     bool is_auth_required();

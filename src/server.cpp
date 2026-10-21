@@ -41,7 +41,8 @@ bool Server::start(const ServerConfig& config) {
         return false;
     }
 
-    if (config.enable_clustering || config.cluster_port > 0 || !config.peers.empty()) {
+    bool clustering_active = config.enable_clustering || config.cluster_port > 0 || !config.peers.empty();
+    if (clustering_active) {
         cluster_server_fd_ = net::create_tcp_listener(config.cluster_port, 64, &cluster_port_);
     }
 
@@ -111,7 +112,7 @@ bool Server::start(const ServerConfig& config) {
     config_ = config;
     event_thread_ = std::thread(&Server::event_loop, this);
 
-    if (config_.enable_clustering && config_.heartbeat_interval_ms > 0) {
+    if (clustering_active && config_.heartbeat_interval_ms > 0) {
         heartbeat_thread_ = std::thread(&Server::heartbeat_loop, this);
     }
 
